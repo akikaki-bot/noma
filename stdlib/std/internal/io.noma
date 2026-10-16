@@ -1,0 +1,18 @@
+// Experimental ABI. These privileges are granted only by the bundled module loader.
+compilerOnly type TSAny = intrinsic;
+
+native fn writeStdout(value: TSAny) -> void | throwable;
+native fn writeStderr(value: TSAny) -> void | throwable;
+native fn readStdinLine() -> string | struct { eof: bool; } | throwable;
+
+pub fn stdoutWrite(text: string) -> void | throwable {
+	return writeStdout(text);
+}
+
+pub fn stderrWrite(text: string) -> void | throwable {
+	return writeStderr(text);
+}
+
+pub fn stdinReadLine() -> string | struct { eof: bool; } | throwable {
+	return readStdinLine();
+}

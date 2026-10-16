@@ -1,0 +1,16 @@
+{
+	"version": "0.2.0",
+	"configurations": [
+		{
+			"name": "Noma: Extension Development Host",
+			"type": "extensionHost",
+			"request": "launch",
+			"preLaunchTask": "Noma: Build extension",
+			"autoAttachChildProcesses": true,
+			"args": [
+				"--extensionDevelopmentPath=${workspaceFolder}/extensions/vscode-noma",
+				"${workspaceFolder}/examples/hello.noma"
+			]
+		}
+	]
+}

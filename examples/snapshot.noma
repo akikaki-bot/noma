@@ -1,0 +1,17 @@
+use "std/io" as io;
+
+type User = struct { name: string; scores: int32[]; };
+
+fn increment(mut value: int32) -> void {
+	value = value + 1;
+}
+
+pub fn main() -> int32 {
+	let mut user: User = struct { name: "Alice", scores: [10, 20] };
+	let saved: User = snapshot user;
+	increment(user.scores[0]);
+	user.name = "Bob";
+	io.puts(saved.name) catch error { return 1; };
+	if user.scores[0] == 11 && saved.scores[0] == 10 { return 0; }
+	return 1;
+}

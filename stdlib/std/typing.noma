@@ -1,0 +1,8 @@
+// Compiler-only metadata; this is not a runtime object or a universal value type.
+compilerOnly type Type = intrinsic;
+
+// Dependent compiler intrinsic API: target is a type designator, value must be
+// Readonly, and the instantiated result is target | throwable. Here intrinsic
+// marks the compiler-supplied operand/result contracts, not a public value type.
+// Implementation lives in the checker and runtime; no TSAny crosses this API.
+pub fn trycast(target: Type, value: intrinsic) -> intrinsic;

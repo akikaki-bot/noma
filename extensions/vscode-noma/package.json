@@ -1,0 +1,87 @@
+{
+	"name": "noma-language",
+	"displayName": "Noma Language",
+	"description": "Noma language support with diagnostics, completion, hover, definitions and references.",
+	"version": "0.2.0",
+	"publisher": "noma-local",
+	"private": true,
+	"license": "UNLICENSED",
+	"type": "module",
+	"main": "./dist/extension.cjs",
+	"activationEvents": [
+		"onLanguage:noma"
+	],
+	"extensionKind": [
+		"workspace"
+	],
+	"engines": {
+		"vscode": "^1.91.0"
+	},
+	"categories": [
+		"Programming Languages",
+		"Snippets"
+	],
+	"keywords": [
+		"noma",
+		"syntax",
+		"language"
+	],
+	"capabilities": {
+		"untrustedWorkspaces": {
+			"supported": true
+		},
+		"virtualWorkspaces": {
+			"supported": "limited",
+			"description": "Syntax highlighting is available; language analysis requires file or untitled documents on a Node extension host."
+		}
+	},
+	"contributes": {
+		"languages": [
+			{
+				"id": "noma",
+				"aliases": [
+					"Noma",
+					"noma"
+				],
+				"extensions": [
+					".noma"
+				],
+				"configuration": "./language-configuration.json"
+			}
+		],
+		"grammars": [
+			{
+				"language": "noma",
+				"scopeName": "source.noma",
+				"path": "./syntaxes/noma.tmLanguage.json"
+			}
+		],
+		"snippets": [
+			{
+				"language": "noma",
+				"path": "./snippets/noma.json"
+			}
+		]
+	},
+	"scripts": {
+		"build": "npm run typecheck && node scripts/build.mjs",
+		"typecheck": "tsc -p tsconfig.json --noEmit",
+		"test": "npm --prefix ../.. run build && npm run build && node --test test/*.test.mjs",
+		"test:host": "npm run build && node scripts/test-host.mjs",
+		"prepackage": "npm test",
+		"package": "node scripts/package.mjs"
+	},
+	"devDependencies": {
+		"@types/node": "24.19.2",
+		"@types/vscode": "1.91.0",
+		"@vscode/test-electron": "3.1.0",
+		"@vscode/vsce": "4.0.0",
+		"esbuild": "0.28.2",
+		"typescript": "5.9.3",
+		"vscode-languageclient": "10.1.2",
+		"vscode-languageserver": "10.1.2",
+		"vscode-languageserver-textdocument": "1.0.15",
+		"vscode-oniguruma": "2.0.1",
+		"vscode-textmate": "9.3.2"
+	}
+}

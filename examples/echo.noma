@@ -1,0 +1,17 @@
+use "std/io" as io;
+
+fn main() -> int32 {
+	while true {
+		let input: string | io.EOF = io.readLine() catch error {
+			io.putsError(error.message) otherwise outputError { void };
+			return 1;
+		};
+		match (input) {
+			case (line: string) {
+				io.puts(line) catch error { return 1; };
+			}
+			case (end: io.EOF) { break; }
+		};
+	}
+	return 0;
+}

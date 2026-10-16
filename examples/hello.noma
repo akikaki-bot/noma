@@ -1,0 +1,8 @@
+use "std/io" as io;
+
+fn main() -> int32 {
+	io.puts("Hello, Noma! こんにちは 🌱") catch error {
+		return 1;
+	};
+	return 0;
+}

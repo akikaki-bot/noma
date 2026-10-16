@@ -1,0 +1,11 @@
+**/*
+!package.json
+!README.md
+!CHANGELOG.md
+!language-configuration.json
+!syntaxes/**
+!snippets/**
+!dist/extension.cjs
+!dist/server.cjs
+!dist/stdlib/**
+!dist/THIRD_PARTY_NOTICES.txt

@@ -1,0 +1,89 @@
+{
+	"Main function": {
+		"prefix": "main",
+		"body": ["fn main() -> int32 {", "\t$0", "\treturn 0;", "}"],
+		"description": "Noma entry point returning an exit code"
+	},
+	"Function": {
+		"prefix": "fn",
+		"body": [
+			"fn ${1:name}(${2:value}: ${3:int32}) -> ${4:void} {",
+			"\t$0",
+			"}"
+		],
+		"description": "Function with explicit parameter and return types"
+	},
+	"Public function": {
+		"prefix": "pubfn",
+		"body": [
+			"pub fn ${1:name}(${2:value}: ${3:int32}) -> ${4:void} {",
+			"\t$0",
+			"}"
+		],
+		"description": "Exported function"
+	},
+	"Immutable binding": {
+		"prefix": "let",
+		"body": "let ${1:value}: ${2:int32} = ${3:0};$0",
+		"description": "Readonly binding with an explicit type"
+	},
+	"Mutable binding": {
+		"prefix": "letmut",
+		"body": "let mut ${1:value}: ${2:int32} = ${3:0};$0",
+		"description": "Mutable binding with an explicit type"
+	},
+	"Snapshot binding": {
+		"prefix": "snapshot",
+		"body": "let ${1:saved}: ${2:int32} = snapshot ${3:value};$0",
+		"description": "Keep an independent readonly snapshot of a value"
+	},
+	"Module import": {
+		"prefix": "use",
+		"body": "use \"${1:std/io}\" as ${2:io};$0",
+		"description": "Import a module with the mandatory alias"
+	},
+	"Struct type": {
+		"prefix": "type",
+		"body": [
+			"type ${1:Data} = struct {",
+			"\t${2:value}: ${3:int32};",
+			"};$0"
+		],
+		"description": "Named structural type"
+	},
+	"If expression": {
+		"prefix": "if",
+		"body": ["if ${1:true} {", "\t$0", "}"],
+		"description": "Conditional block"
+	},
+	"While loop": {
+		"prefix": "while",
+		"body": ["while ${1:true} {", "\t$0", "}"],
+		"description": "Loop with a condition"
+	},
+	"Match expression": {
+		"prefix": "match",
+		"body": [
+			"match (${1:value}) {",
+			"\tcase (${2:n}: ${3:int32}) { ${4:0} }",
+			"\tcase (${5:s}: ${6:string}) { ${7:1} }",
+			"}$0"
+		],
+		"description": "Typed cases; adjust them to exhaust the input union"
+	},
+	"Catch handler": {
+		"prefix": "catch",
+		"body": ["catch ${1:error} {", "\treturn ${2:-1};", "}$0"],
+		"description": "Postfix error handler; the error path must exit (never)"
+	},
+	"Raise error result": {
+		"prefix": "raise",
+		"body": "raise ${1:\"error\"};$0",
+		"description": "Exit a function whose result includes throwable"
+	},
+	"Otherwise handler": {
+		"prefix": "otherwise",
+		"body": ["otherwise ${1:error} {", "\t${2:0}", "}$0"],
+		"description": "Postfix error handler producing a compatible fallback value"
+	}
+}

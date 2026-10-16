@@ -1,0 +1,11 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Noma: Build extension",
+			"type": "npm",
+			"script": "extension:build",
+			"problemMatcher": ["$tsc"]
+		}
+	]
+}

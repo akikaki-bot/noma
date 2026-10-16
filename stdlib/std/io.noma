@@ -1,0 +1,24 @@
+use "std/internal/io" as nativeIO;
+
+// Experimental API: EOF is distinct from both an empty line and an I/O failure.
+pub type EOF = struct { eof: bool; };
+
+pub fn write(text: string) -> void | throwable {
+	return nativeIO.stdoutWrite(text);
+}
+
+pub fn puts(text: string) -> void | throwable {
+	return write(text + "\n");
+}
+
+pub fn writeError(text: string) -> void | throwable {
+	return nativeIO.stderrWrite(text);
+}
+
+pub fn putsError(text: string) -> void | throwable {
+	return writeError(text + "\n");
+}
+
+pub fn readLine() -> string | EOF | throwable {
+	return nativeIO.stdinReadLine();
+}

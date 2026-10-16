@@ -1,0 +1,419 @@
+{
+	"$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+	"name": "Noma",
+	"scopeName": "source.noma",
+	"patterns": [
+		{
+			"include": "#code"
+		}
+	],
+	"repository": {
+		"code": {
+			"patterns": [
+				{
+					"include": "#comments"
+				},
+				{
+					"include": "#strings"
+				},
+				{
+					"include": "#cast"
+				},
+				{
+					"include": "#trycast-type"
+				},
+				{
+					"include": "#function-declaration"
+				},
+				{
+					"include": "#type-declaration"
+				},
+				{
+					"include": "#variable-declaration"
+				},
+				{
+					"include": "#case"
+				},
+				{
+					"include": "#return-type"
+				},
+				{
+					"include": "#keywords"
+				},
+				{
+					"include": "#builtin-types"
+				},
+				{
+					"name": "constant.language.boolean.noma",
+					"match": "\\b(?:true|false)\\b"
+				},
+				{
+					"name": "constant.numeric.integer.noma",
+					"match": "\\b[0-9]+\\b"
+				},
+				{
+					"name": "entity.name.function.call.noma",
+					"match": "\\b[A-Za-z_][A-Za-z_0-9]*\\b(?=\\s*\\()"
+				},
+				{
+					"include": "#operators"
+				},
+				{
+					"name": "punctuation.section.brackets.noma",
+					"match": "[{}()\\[\\]]"
+				},
+				{
+					"name": "punctuation.separator.noma",
+					"match": "[;:,.]"
+				},
+				{
+					"name": "variable.other.noma",
+					"match": "\\b[A-Za-z_][A-Za-z_0-9]*\\b"
+				}
+			]
+		},
+		"comments": {
+			"patterns": [
+				{
+					"name": "comment.line.double-slash.noma",
+					"begin": "//",
+					"end": "$"
+				},
+				{
+					"include": "#block-comment"
+				}
+			]
+		},
+		"block-comment": {
+			"name": "comment.block.noma",
+			"begin": "/\\*",
+			"end": "\\*/",
+			"patterns": [
+				{
+					"include": "#block-comment"
+				}
+			]
+		},
+		"strings": {
+			"name": "string.quoted.double.noma",
+			"begin": "\"",
+			"beginCaptures": {
+				"0": {
+					"name": "punctuation.definition.string.begin.noma"
+				}
+			},
+			"end": "\"|$",
+			"endCaptures": {
+				"0": {
+					"name": "punctuation.definition.string.end.noma"
+				}
+			},
+			"patterns": [
+				{
+					"name": "constant.character.escape.noma",
+					"match": "\\\\(?:[\"\\\\/bfnrt]|u[0-9a-fA-F]{4})"
+				},
+				{
+					"name": "invalid.illegal.escape.noma",
+					"match": "\\\\."
+				}
+			]
+		},
+		"function-declaration": {
+			"name": "meta.function.signature.noma",
+			"begin": "\\b(fn)\\s+([A-Za-z_][A-Za-z_0-9]*)",
+			"beginCaptures": {
+				"1": {
+					"name": "storage.type.function.noma"
+				},
+				"2": {
+					"name": "entity.name.function.noma"
+				}
+			},
+			"end": "(?<=\\))|(?=[{;])",
+			"patterns": [
+				{
+					"include": "#comments"
+				},
+				{
+					"begin": "\\(",
+					"end": "\\)",
+					"beginCaptures": {
+						"0": {
+							"name": "punctuation.section.parameters.begin.noma"
+						}
+					},
+					"endCaptures": {
+						"0": {
+							"name": "punctuation.section.parameters.end.noma"
+						}
+					},
+					"patterns": [
+						{
+							"include": "#comments"
+						},
+						{
+							"name": "storage.modifier.noma",
+							"match": "\\bmut\\b"
+						},
+						{
+							"name": "variable.parameter.noma",
+							"match": "\\b[A-Za-z_][A-Za-z_0-9]*\\b"
+						},
+						{
+							"include": "#annotation"
+						},
+						{
+							"name": "punctuation.separator.noma",
+							"match": ","
+						}
+					]
+				}
+			]
+		},
+		"type-declaration": {
+			"name": "meta.type.declaration.noma",
+			"begin": "\\b(type)\\s+([A-Za-z_][A-Za-z_0-9]*)",
+			"beginCaptures": {
+				"1": {
+					"name": "storage.type.noma"
+				},
+				"2": {
+					"name": "entity.name.type.noma"
+				}
+			},
+			"end": ";",
+			"endCaptures": {
+				"0": {
+					"name": "punctuation.terminator.noma"
+				}
+			},
+			"patterns": [
+				{
+					"include": "#types"
+				}
+			]
+		},
+		"variable-declaration": {
+			"name": "meta.variable.declaration.noma",
+			"begin": "\\b(let)\\s+(?:(mut)\\s+)?([A-Za-z_][A-Za-z_0-9]*)",
+			"beginCaptures": {
+				"1": {
+					"name": "storage.type.noma"
+				},
+				"2": {
+					"name": "storage.modifier.noma"
+				},
+				"3": {
+					"name": "variable.other.definition.noma"
+				}
+			},
+			"end": "(?==|;|})",
+			"patterns": [
+				{
+					"include": "#types"
+				}
+			]
+		},
+		"case": {
+			"begin": "\\b(case)\\s*(\\()",
+			"beginCaptures": {
+				"1": {
+					"name": "keyword.control.noma"
+				},
+				"2": {
+					"name": "punctuation.section.parameters.begin.noma"
+				}
+			},
+			"end": "\\)",
+			"endCaptures": {
+				"0": {
+					"name": "punctuation.section.parameters.end.noma"
+				}
+			},
+			"patterns": [
+				{
+					"include": "#comments"
+				},
+				{
+					"name": "variable.parameter.noma",
+					"match": "\\b[A-Za-z_][A-Za-z_0-9]*\\b"
+				},
+				{
+					"include": "#annotation"
+				}
+			]
+		},
+		"annotation": {
+			"begin": ":",
+			"beginCaptures": {
+				"0": {
+					"name": "punctuation.separator.type.noma"
+				}
+			},
+			"end": "(?=[,;)])",
+			"patterns": [
+				{
+					"include": "#types"
+				}
+			]
+		},
+		"return-type": {
+			"begin": "->",
+			"beginCaptures": {
+				"0": {
+					"name": "keyword.operator.arrow.noma"
+				}
+			},
+			"end": "(?=[{;])",
+			"patterns": [
+				{
+					"include": "#types"
+				}
+			]
+		},
+		"types": {
+			"patterns": [
+				{
+					"include": "#comments"
+				},
+				{
+					"begin": "\\b(struct)\\b",
+					"beginCaptures": {
+						"1": {
+							"name": "storage.type.noma"
+						}
+					},
+					"end": "}",
+					"endCaptures": {
+						"0": {
+							"name": "punctuation.section.block.end.noma"
+						}
+					},
+					"patterns": [
+						{
+							"include": "#comments"
+						},
+						{
+							"name": "punctuation.section.block.begin.noma",
+							"match": "\\{"
+						},
+						{
+							"name": "variable.other.property.noma",
+							"match": "\\b[A-Za-z_][A-Za-z_0-9]*\\b(?=\\s*:)"
+						},
+						{
+							"include": "#types"
+						}
+					]
+				},
+				{
+					"begin": "\\(",
+					"end": "\\)",
+					"patterns": [
+						{
+							"include": "#types"
+						}
+					]
+				},
+				{
+					"include": "#builtin-types"
+				},
+				{
+					"name": "keyword.other.intrinsic.noma",
+					"match": "\\bintrinsic\\b"
+				},
+				{
+					"name": "entity.name.type.noma",
+					"match": "\\b[A-Za-z_][A-Za-z_0-9]*\\b"
+				},
+				{
+					"include": "#operators"
+				},
+				{
+					"name": "punctuation.separator.type.noma",
+					"match": "[;:,.\\[\\]]"
+				}
+			]
+		},
+		"builtin-types": {
+			"name": "support.type.builtin.noma",
+			"match": "\\b(?:int32|string|bool|void|never|throwable|Type|Array|TSAny)\\b"
+		},
+		"keywords": {
+			"patterns": [
+				{
+					"name": "storage.modifier.noma",
+					"match": "\\b(?:pub|mut|native|compilerOnly)\\b"
+				},
+				{
+					"name": "storage.type.noma",
+					"match": "\\b(?:fn|let|type|struct)\\b"
+				},
+				{
+					"name": "keyword.control.noma",
+					"match": "\\b(?:return|if|else|while|break|match|case|raise|catch|otherwise)\\b"
+				},
+				{
+					"name": "keyword.control.import.noma",
+					"match": "\\b(?:use|as)\\b"
+				},
+				{
+					"name": "keyword.operator.snapshot.noma",
+					"match": "\\bsnapshot\\b"
+				},
+				{
+					"name": "keyword.other.intrinsic.noma",
+					"match": "\\bintrinsic\\b"
+				}
+			]
+		},
+		"operators": {
+			"name": "keyword.operator.noma",
+			"match": "->|=>|==|!=|<=|>=|&&|\\|\\||[|=+*/%!<>-]"
+		},
+		"cast": {
+			"name": "meta.cast.noma",
+			"begin": "\\((?=\\s*[A-Za-z_][A-Za-z_0-9]*(?:\\.[A-Za-z_][A-Za-z_0-9]*)?(?:<[^;\\n()]*>)?(?:\\[\\])*\\s*\\)\\s*(?:[A-Za-z_\"(\\[]))",
+			"beginCaptures": {
+				"0": {
+					"name": "punctuation.section.cast.begin.noma"
+				}
+			},
+			"end": "\\)",
+			"endCaptures": {
+				"0": {
+					"name": "punctuation.section.cast.end.noma"
+				}
+			},
+			"patterns": [
+				{
+					"include": "#types"
+				}
+			]
+		},
+		"trycast-type": {
+			"name": "meta.trycast.type-argument.noma",
+			"begin": "\\b(trycast)\\s*(\\()",
+			"beginCaptures": {
+				"1": {
+					"name": "entity.name.function.call.noma"
+				},
+				"2": {
+					"name": "punctuation.section.arguments.begin.noma"
+				}
+			},
+			"end": ",|(?=\\))",
+			"endCaptures": {
+				"0": {
+					"name": "punctuation.separator.noma"
+				}
+			},
+			"patterns": [
+				{
+					"include": "#types"
+				}
+			]
+		}
+	}
+}
