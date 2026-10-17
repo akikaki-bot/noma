@@ -3,7 +3,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { analyzeFile, AnalysisSnapshot } from "./analysis.js";
 import type { AnalysisOptions } from "./analysis.js";
-import { canonicalPath } from "./modules.js";
+import { canonicalPath, loadProgram } from "./modules.js";
+import { checkProgram } from "./checker.js";
+import type { CheckedProgram } from "./checker.js";
+import { LanguageError } from "./ast.js";
 
 export interface EditorDocument {
 	uri: string;
@@ -111,6 +114,40 @@ export class AnalysisWorkspace {
 			...this.options,
 			sources,
 		});
+		let editorChecked: CheckedProgram | undefined;
+		const assistanceSources = new Map(result.sources);
+		if (!result.checked) {
+			try {
+				const program = await loadProgram(this.fileFor(document), {
+					...this.options,
+					sources,
+					editorRecovery: true,
+					onSource(source) {
+						assistanceSources.set(source.file, source);
+					},
+				});
+				editorChecked = checkProgram(program, {
+					requireEntryPoint: false,
+					editorRecovery: true,
+				});
+			} catch (error) {
+				if (
+					!(error instanceof LanguageError) &&
+					!(
+						error instanceof Error &&
+						"code" in error &&
+						[
+							"ENOENT",
+							"EACCES",
+							"EPERM",
+							"ENOTDIR",
+							"EISDIR",
+						].includes(String(error.code))
+					)
+				)
+					throw error;
+			}
+		}
 		if (
 			this.generation !== generation ||
 			this.requests.get(uri) !== request ||
@@ -120,8 +157,9 @@ export class AnalysisWorkspace {
 		const snapshot = new AnalysisSnapshot(
 			uri,
 			document.version,
-			result,
+			{ ...result, sources: assistanceSources },
 			uris,
+			editorChecked,
 		);
 		this.results.set(uri, snapshot);
 		return snapshot;

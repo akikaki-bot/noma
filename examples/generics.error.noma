@@ -1,0 +1,13 @@
+fn identity<T>(value: T) -> T {
+    return value;
+}
+
+fn broken<T>(value: T) -> T {
+    return value + value;
+}
+
+pub fn main() -> int32 {
+    let a: int32 = identity<string>(123);
+    return 0;
+}
+

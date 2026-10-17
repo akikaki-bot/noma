@@ -15,6 +15,7 @@ export type {
 	Statement,
 	Expression,
 	TypeNode,
+	TypeParameter,
 } from "./ast.js";
 export { parse } from "./parser.js";
 export { lex } from "./lexer.js";

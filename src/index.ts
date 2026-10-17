@@ -17,7 +17,12 @@ export { LanguageError } from "./ast.js";
 export { parse } from "./parser.js";
 export { lex } from "./lexer.js";
 export { Interpreter } from "./interpreter.js";
-export { NativeRegistry, NodeIOHost, createIORegistry } from "./native.js";
+export {
+	NativeRegistry,
+	NodeIOHost,
+	createIORegistry,
+	registerCoreNatives,
+} from "./native.js";
 export { ThrowableValue } from "./values.js";
 export { analyzeFile, AnalysisSnapshot } from "./analysis.js";
 export type {
@@ -27,6 +32,8 @@ export type {
 	Location,
 	Hover,
 	Completion,
+	CompletionItem,
+	SignatureHelp,
 } from "./analysis.js";
 export { AnalysisWorkspace } from "./workspace.js";
 export type {

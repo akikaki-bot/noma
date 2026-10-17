@@ -2,6 +2,8 @@ import { LanguageError } from "./ast.js";
 import type { Block, Expression, Node, Statement } from "./ast.js";
 import type { CheckedProgram, FunctionInfo } from "./checker.js";
 import type { NativeRegistry } from "./native.js";
+import { substitute } from "./types.js";
+import type { Type } from "./types.js";
 import {
 	clone,
 	matches,
@@ -18,7 +20,13 @@ interface Cell {
 }
 class Environment {
 	readonly cells = new Map<string, Cell>();
-	constructor(readonly parent: Environment | null = null) {}
+	readonly typeBindings: ReadonlyMap<string, Type>;
+	constructor(
+		readonly parent: Environment | null = null,
+		bindings?: ReadonlyMap<string, Type>,
+	) {
+		this.typeBindings = bindings ?? parent?.typeBindings ?? new Map();
+	}
 	get(name: string): Cell {
 		const cell = this.cells.get(name) ?? this.parent?.get(name);
 		if (!cell) throw new Error(`Unresolved runtime binding: ${name}`);
@@ -50,6 +58,8 @@ export class Interpreter {
 		readonly native: NativeRegistry,
 		options: RunOptions = {},
 	) {
+		if (program.editorOnly)
+			throw new Error("Recovered editor programs cannot be executed");
 		this.maxSteps = options.maxSteps ?? 1_000_000;
 		native.link(program);
 	}
@@ -68,11 +78,26 @@ export class Interpreter {
 	private async call(
 		fn: FunctionInfo,
 		args: (Value | Cell)[],
+		callerTypes: ReadonlyMap<string, Type> = new Map(),
 	): Promise<Value> {
 		this.tick(fn.declaration);
 		if (fn.declaration.native) return this.native.call(fn, args as Value[]);
-		const env = new Environment();
+		const bindings = new Map(
+			[...(fn.typeBindings ?? [])].map(([id, type]) => [
+				id,
+				substitute(type, callerTypes),
+			]),
+		);
+		const env = new Environment(null, bindings);
 		fn.declaration.params.forEach((parameter, index) => {
+			const value = parameter.mutable
+				? (args[index] as Cell).get()
+				: args[index];
+			if (!matches(value, substitute(fn.params[index]!, callerTypes)))
+				throw new LanguageError(
+					parameter.span,
+					"Function argument violates its checked type",
+				);
 			if (parameter.mutable)
 				env.cells.set(parameter.name, args[index] as Cell);
 			else env.bind(parameter.name, args[index] as Value, false);
@@ -84,7 +109,7 @@ export class Interpreter {
 			if (!(signal instanceof ReturnSignal)) throw signal;
 			value = signal.value;
 		}
-		if (!matches(value, fn.result))
+		if (!matches(value, substitute(fn.result, callerTypes)))
 			throw new LanguageError(
 				fn.declaration.span,
 				"Function result violates its checked type",
@@ -207,7 +232,8 @@ export class Interpreter {
 			value > 2147483647
 		)
 			throw new LanguageError(node.span, "int32 arithmetic overflow");
-		return value;
+		// int32 has one zero; do not leak the host's floating-point negative zero.
+		return value === 0 ? 0 : value;
 	}
 	private async expression(
 		expression: Expression,
@@ -232,7 +258,10 @@ export class Interpreter {
 			case "cast":
 				return project(
 					await this.expression(expression.value, env),
-					this.program.projections.get(expression)!,
+					substitute(
+						this.program.projections.get(expression)!,
+						env.typeBindings,
+					),
 				);
 			case "type-argument":
 				throw new LanguageError(
@@ -292,7 +321,10 @@ export class Interpreter {
 						expression.args[1]!.value,
 						env,
 					);
-					const target = this.program.projections.get(expression)!;
+					const target = substitute(
+						this.program.projections.get(expression)!,
+						env.typeBindings,
+					);
 					try {
 						return project(value, target);
 					} catch (error) {
@@ -307,7 +339,7 @@ export class Interpreter {
 							? await this.lvalue(arg.value, env)
 							: await this.expression(arg.value, env),
 					);
-				return this.call(called, args);
+				return this.call(called, args, env.typeBindings);
 			}
 			case "unary": {
 				const operand = await this.expression(expression.operand, env);
@@ -372,7 +404,13 @@ export class Interpreter {
 				for (const arm of expression.arms) {
 					if (
 						arm.type &&
-						!matches(value, this.program.matchTypes.get(arm.type)!)
+						!matches(
+							value,
+							substitute(
+								this.program.matchTypes.get(arm.type)!,
+								env.typeBindings,
+							),
+						)
 					)
 						continue;
 					const branch = new Environment(env);

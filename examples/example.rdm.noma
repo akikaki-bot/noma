@@ -1,0 +1,21 @@
+use "std/io" as io;
+
+fn main() -> int32 {
+    let mut inputValue: string = "";
+	while true {
+		let input: string | io.EOF = io.readLine() catch error {
+			io.putsError(error.message) otherwise outputError { void };
+			return 1;
+		};
+		match (input) {
+			case (line: string) {
+				inputValue = line;
+                break;
+			}
+			case (end: io.EOF) { break; }
+		};
+	}
+
+    io.puts(inputValue+" from Noma!");
+	return 0;
+}

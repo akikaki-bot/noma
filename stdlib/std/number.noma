@@ -1,0 +1,56 @@
+use "std/internal/number" as arithmetic;
+use "std/internal/string" as unicode;
+
+pub fn absInt32(value: int32) -> int32 | throwable {
+	if value == -2147483648 { raise "absInt32: overflow"; }
+	if value < 0 { return -value; }
+	return value;
+}
+pub fn minInt32(a: int32, b: int32) -> int32 { if a < b { return a; } return b; }
+pub fn maxInt32(a: int32, b: int32) -> int32 { if a > b { return a; } return b; }
+pub fn clampInt32(value: int32, min: int32, max: int32) -> int32 | throwable {
+	if min > max { raise "clampInt32: min exceeds max"; }
+	return minInt32(maxInt32(value, min), max);
+}
+pub fn checkedAddInt32(a: int32, b: int32) -> int32 | throwable { return arithmetic.add(a, b); }
+pub fn checkedSubInt32(a: int32, b: int32) -> int32 | throwable { return arithmetic.sub(a, b); }
+pub fn checkedMulInt32(a: int32, b: int32) -> int32 | throwable { return arithmetic.mul(a, b); }
+
+pub fn int32ToString(value: int32) -> string {
+	if value == 0 { return "0"; }
+	// Work in the negative half of int32 so INT32_MIN never needs to be negated.
+	let mut remaining: int32 = value;
+	if remaining > 0 { remaining = -remaining; }
+	let mut result: string = "";
+	while remaining != 0 {
+		let digit: int32 = -(remaining % 10);
+		// 48..57 are known Unicode scalars; conversion cannot fail.
+		let character: string = unicode.from(48 + digit) otherwise e { "" };
+		result = character + result;
+		remaining = remaining / 10;
+	}
+	if value < 0 { return "-" + result; }
+	return snapshot result;
+}
+
+// Strict ASCII [+-]?[0-9]+. No whitespace, separators, prefixes or Unicode digits.
+pub fn parseInt32(text: string) -> int32 | throwable {
+	if text == "" { raise "parseInt32: expected decimal integer"; }
+	let first: int32 = unicode.at(text, 0) catch e { raise e; };
+	let size: int32 = unicode.length(text);
+	let negative: bool = first == 45;
+	let mut index: int32 = 0;
+	if first == 43 || negative { index = 1; }
+	if index == size { raise "parseInt32: expected digits"; }
+	let mut result: int32 = 0;
+	while index < size {
+		let codepoint: int32 = unicode.at(text, snapshot index) catch e { raise e; };
+		if codepoint < 48 || codepoint > 57 { raise "parseInt32: invalid decimal digit"; }
+		let shifted: int32 = checkedMulInt32(snapshot result, 10) catch e { raise e; };
+		result = checkedSubInt32(shifted, codepoint - 48) catch e { raise e; };
+		index = index + 1;
+	}
+	if negative { return snapshot result; }
+	if result == -2147483648 { raise "parseInt32: overflow"; }
+	return -result;
+}

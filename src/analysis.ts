@@ -9,6 +9,9 @@ import type { SemanticSymbol, SymbolKind } from "./semantic.js";
 import { SourceText } from "./source.js";
 import type { Position, Range, SourceRange } from "./source.js";
 import { describe } from "./types.js";
+import { completionItems, signatureHelp } from "./assistance.js";
+import type { CompletionItem, SignatureHelp } from "./assistance.js";
+export type { CompletionItem, SignatureHelp } from "./assistance.js";
 
 export interface Diagnostic {
 	uri: string;
@@ -18,7 +21,10 @@ export interface Diagnostic {
 	source: "noma";
 	code: "syntax" | "resolve" | "type" | "io";
 }
-export interface AnalysisOptions extends LoadProgramOptions, CheckOptions {}
+export interface AnalysisOptions
+	extends
+		Omit<LoadProgramOptions, "editorRecovery">,
+		Omit<CheckOptions, "editorRecovery"> {}
 export interface AnalysisResult {
 	status: "success" | "error";
 	diagnostics: readonly Diagnostic[];
@@ -38,6 +44,7 @@ export async function analyzeFile(
 	try {
 		program = await loadProgram(file, {
 			...options,
+			editorRecovery: false,
 			onSource(source) {
 				sources.set(source.file, source);
 				options.onSource?.(source);
@@ -147,6 +154,7 @@ export class AnalysisSnapshot {
 		readonly version: number,
 		readonly result: AnalysisResult,
 		private readonly uris: ReadonlyMap<string, string> = new Map(),
+		private readonly editorChecked?: CheckedProgram,
 	) {
 		this.diagnostics = result.diagnostics.map((diagnostic) => ({
 			...diagnostic,
@@ -275,5 +283,23 @@ export class AnalysisSnapshot {
 			mutable: symbol.mutable,
 			definition: this.location(symbol.range),
 		}));
+	}
+	/** Includes keywords/fields and can use current-version recovered editor information. */
+	completionItems(uri: string, position: Position): CompletionItem[] {
+		const source = this.source(uri);
+		return source
+			? completionItems(
+					this.result.checked ?? this.editorChecked,
+					source,
+					source.offsetAt(position),
+				)
+			: [];
+	}
+	signatureHelp(uri: string, position: Position): SignatureHelp | undefined {
+		const source = this.source(uri),
+			checked = this.result.checked ?? this.editorChecked;
+		return source && checked
+			? signatureHelp(checked, source, source.offsetAt(position))
+			: undefined;
 	}
 }

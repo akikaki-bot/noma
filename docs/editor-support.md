@@ -13,9 +13,9 @@
 | 可変性検査 | 実装済みの範囲あり | Deep Readonly、snapshot要求、署名によるmut引数とReadonly引数へのsnapshot要求、可変引数の不変性、別名競合・借用値の脱出の保守的な検査。言語全体の寿命・並行性規則を確定するものではない |
 | Native / stdlib | 実装済みの範囲あり | 信頼された `std/internal` の `native fn`、`compilerOnly type TSAny = intrinsic`、型付きNative Registry。`std/io` は実験的APIとしてEOF・エラーを区別 |
 | ソース位置・診断 | 一部実装 | Spanの互換性を維持し、Token/ASTにUTF-16半開範囲・識別子範囲を追加。解析APIは最初の診断を返す。複数診断・Parser回復は未実装 |
-| LSPサーバー・クライアント | 0.2.0で接続 | 既存解析APIを共有する診断・補完・Hover・定義・参照。通信・文書管理は処理系とは別ディレクトリ |
+| LSPサーバー・クライアント | 0.2.0で接続 | 既存解析APIを共有する診断・補完・引数ヒント・Hover・定義・参照。通信・文書管理は処理系とは別ディレクトリ |
 
-v0.0.2ではraise/catch、構造的cast、std/typingの型指定引数、Array<T>表記、名前付き構造体値、int32の後置++に対応しました。一般ジェネリクスやcontinueは未実装です。以下の0.2.0以前の件数は当時の検証記録です。
+v0.0.2ではraise/catch、構造的cast、std/typingの型指定引数、Array<T>表記、名前付き構造体値、int32の後置++に対応しました。Generics v0.1と条件式の括弧省略、未完成コード補完・引数ヒントにも対応しています。continueは未実装です。以下の0.2.0以前の件数は当時の検証記録です。
 
 ## 第二段階のLSP接続（0.2.0）
 
@@ -30,11 +30,11 @@ v0.0.2ではraise/catch、構造的cast、std/typingの型指定引数、Array<T
 
 `AnalysisWorkspace` / `AnalysisSnapshot` を通して診断・Hover・補完・定義・参照を提供します。`main` を要求しないライブラリ解析を使い、`file:` と `untitled:` に対応します。変更後は旧snapshotを破棄し、複数のrootが報告する同じ診断を重複排除して文書別に通知します。依存ファイルをcloseした場合はディスクの本文へ戻ります。
 
-Ctrl＋クリック / F12は `textDocument/definition`、Shift＋F12は `textDocument/references`、Hoverは `textDocument/hover`、補完は `textDocument/completion` で実装しています。参照検索は開いているrootとその依存モジュールのsnapshotを集約します。未読の全プロジェクトファイルを走査するインデックスはまだありません。
+Ctrl＋クリック / F12は `textDocument/definition`、Shift＋F12は `textDocument/references`、Hoverは `textDocument/hover`、補完は `textDocument/completion`、引数ヒントは `textDocument/signatureHelp` で実装しています。参照検索は開いているrootとその依存モジュールのsnapshotを集約します。未読の全プロジェクトファイルを走査するインデックスはまだありません。
 
 サーバーには解析専用の依存だけをバンドルし、Interpreter・Native Registryは含めません。stdlibもVSIXに同梱して明示的な `stdlibRoot` を渡すため、利用者のNoma処理系インストールやリポジトリの配置に依存しません。信頼境界は既存ローダーに委ね、LSP経由の編集でnative権限を与えません。
 
-**現在の制限:** 診断は各解析の最初の1件です。意味情報は全体の型検査成功時だけ利用できます。未完成の `io.` 等での補完、構造体フィールドの定義・参照、プロジェクト全体の未読ファイルの参照検索は未実装です。仮想文書・Web拡張ホストのLSPは対象外です。workspace folderは独立したパッケージルートとして扱い、入れ子のfolderは外側のrootを共有します。
+**現在の制限:** 診断は各解析の最初の1件です。Hover・定義・参照は全体の型検査成功時だけ利用できます。補完と引数ヒントは現在の文書から回復した情報も利用します。構造体フィールドの定義・参照、プロジェクト全体の未読ファイルの参照検索は未実装です。仮想文書・Web拡張ホストのLSPは対象外です。workspace folderは独立したパッケージルートとして扱い、入れ子のfolderは外側のrootを共有します。
 
 検証は `npm run extension:test`（TextMateとスニペット、LSP通信とバンドル境界）、`npm run extension:test:host`（実際のVS Codeプロバイダー）、`npm test`（処理系）で行います。VSIX生成は `npm run extension:package`。利用方法は拡張のREADMEを参照してください。
 
@@ -54,7 +54,7 @@ Ctrl＋クリック / F12は `textDocument/definition`、Shift＋F12は `textDoc
 
 処理系側に `analyzeFile` / `AnalysisWorkspace` / `AnalysisSnapshot` を追加しました。未保存文書と依存の解析、main検査の分離、UTF-16診断、URI/versionの管理、修正・close時の失効、古い非同期結果の破棄に対応します。成功したsnapshotからHover、スコープ内の名前・公開moduleメンバー補完、定義・参照を問い合わせられます。
 
-利用方法・型・信頼境界・制限は [lsp-api.md](lsp-api.md) を参照してください。Parser回復と未完成構文の補完、複数診断は未実装です。LSP通信層は拡張0.2.0で接続しました。以下はAPI整備前の調査時点の設計方針として残します。
+利用方法・型・信頼境界・制限は [lsp-api.md](lsp-api.md) を参照してください。補完専用のParser回復と未完成構文の補完に対応しました。複数診断は未実装です。LSP通信層は拡張0.2.0で接続しました。以下はAPI整備前の調査時点の設計方針として残します。
 
 API整備後の検証では、処理系99件（追加23件）、既存拡張21件、TypeScriptビルド、整形検査が成功しました。
 

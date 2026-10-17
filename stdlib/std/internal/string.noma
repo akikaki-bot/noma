@@ -1,0 +1,8 @@
+// Trusted low-level Unicode boundary. No TSAny is needed.
+native fn codepointLength(text: string) -> int32;
+native fn codepointAt(text: string, index: int32) -> int32 | throwable;
+native fn fromCodepoint(codepoint: int32) -> string | throwable;
+
+pub fn length(text: string) -> int32 { return codepointLength(text); }
+pub fn at(text: string, index: int32) -> int32 | throwable { return codepointAt(text, index); }
+pub fn from(codepoint: int32) -> string | throwable { return fromCodepoint(codepoint); }

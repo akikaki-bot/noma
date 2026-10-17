@@ -1,0 +1,29 @@
+use "std/io" as io;
+use "std/number" as num;
+
+type Box<T> = struct {
+    value: T;
+};
+
+fn identity<T>(value: T) -> T {
+    return value;
+}
+
+pub fn main() -> int32 {
+    let box: Box<string> = Box<string> {
+        value: identity<string>("Hello, Noma!")
+    };
+
+
+    let boxInBox: Box<Box<int32>> = Box<Box<int32>> {
+        value: Box<int32> {
+            value: 42
+        }
+    };
+
+    io.puts("box:"+ box.value);
+    io.puts("box2:"+ num.int32ToString(boxInBox.value.value));
+
+    return 0;
+}
+

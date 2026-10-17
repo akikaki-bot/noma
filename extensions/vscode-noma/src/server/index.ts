@@ -41,7 +41,11 @@ connection.onInitialize((params) => {
 			referencesProvider: true,
 			completionProvider: {
 				resolveProvider: false,
-				triggerCharacters: ["."],
+				triggerCharacters: [".", "<"],
+			},
+			signatureHelpProvider: {
+				triggerCharacters: ["(", ","],
+				retriggerCharacters: [","],
 			},
 			...(params.capabilities.workspace?.workspaceFolders
 				? {
@@ -99,6 +103,13 @@ connection.onReferences(async (params, token) => {
 		params.context.includeDeclaration,
 	);
 	return token.isCancellationRequested ? [] : result;
+});
+connection.onSignatureHelp(async (params, token) => {
+	const result = await service.signatureHelp(
+		params.textDocument.uri,
+		params.position,
+	);
+	return token.isCancellationRequested ? null : result;
 });
 connection.onShutdown(() => service.dispose());
 documents.listen(connection);

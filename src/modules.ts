@@ -3,7 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { LanguageError } from "./ast.js";
 import type { Declaration, Module, Span } from "./ast.js";
-import { parse } from "./parser.js";
+import { parse, parseForEditor } from "./parser.js";
 import { SourceText } from "./source.js";
 
 export interface SourceModule {
@@ -17,6 +17,7 @@ export interface SourceModule {
 export interface Program {
 	entry: SourceModule;
 	modules: SourceModule[];
+	editorOnly?: boolean;
 }
 /** Trusted host configuration, never supplied by Noma source code. */
 export interface SourceFileSystem {
@@ -34,6 +35,8 @@ export interface LoadProgramOptions {
 	/** Absolute file paths; overlays never confer stdlib/native privileges. */
 	sources?: ReadonlyMap<string, string>;
 	onSource?: (source: SourceText) => void;
+	/** Editor assistance only: recover incomplete, untrusted source ASTs. */
+	editorRecovery?: boolean;
 }
 function missing(error: unknown): boolean {
 	return (
@@ -151,7 +154,9 @@ export async function loadProgram(
 			sources.get(file) ?? (await fs.readFile(file)),
 		);
 		options.onSource?.(source);
-		const ast = parse(source.text, file);
+		const ast = (
+			options.editorRecovery && !trusted ? parseForEditor : parse
+		)(source.text, file);
 		const module: SourceModule = {
 			id,
 			file,
@@ -219,7 +224,11 @@ export async function loadProgram(
 		return module;
 	}
 	const entry = await load(entryPath, "app/main", false);
-	return { entry, modules };
+	return {
+		entry,
+		modules,
+		...(options.editorRecovery ? { editorOnly: true } : {}),
+	};
 }
 export function declarations(
 	module: SourceModule,

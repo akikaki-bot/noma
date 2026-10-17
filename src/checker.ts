@@ -11,6 +11,7 @@ import type { Program, SourceModule } from "./modules.js";
 import { declarations } from "./modules.js";
 import {
 	assignable,
+	substitute,
 	BOOL,
 	builtins,
 	containsTSAny,
@@ -42,6 +43,7 @@ export interface FunctionInfo {
 	params: Type[];
 	result: Type;
 	intrinsic?: "trycast";
+	typeBindings?: ReadonlyMap<string, Type>;
 }
 interface Binding {
 	type: Type;
@@ -113,6 +115,7 @@ export class CheckedProgram {
 	readonly functions = new Map<SourceModule, Map<string, FunctionInfo>>();
 	readonly types = new Map<SourceModule, Map<string, Type>>();
 	readonly expressionTypes = new WeakMap<Expression, Type>();
+	private readonly constantIntegers = new WeakMap<Expression, bigint>();
 	readonly matchTypes = new WeakMap<TypeNode, Type>();
 	readonly calls = new WeakMap<Expression, FunctionInfo>();
 	readonly projections = new WeakMap<Expression, Type>();
@@ -121,15 +124,32 @@ export class CheckedProgram {
 		ReturnType<typeof declarations>
 	>();
 	private readonly resolving = new Set<Declaration>();
+	private readonly parameterScopes = new WeakMap<
+		Declaration,
+		Map<string, Type>
+	>();
+	private readonly parameterSymbols = new Map<string, SemanticSymbol>();
+	private recovering = false;
+	private activeTypeParameters: ReadonlyMap<string, Type> = new Map();
 	constructor(readonly program: Program) {
 		this.semantic = new SemanticIndex(program);
 	}
+	get editorOnly(): boolean {
+		return this.recovering || this.program.editorOnly === true;
+	}
 	check(options: CheckOptions = {}): this {
+		if (this.program.editorOnly && !options.editorRecovery)
+			throw new Error(
+				"Recovered editor ASTs cannot be compiled for execution",
+			);
+		this.recovering = options.editorRecovery ?? false;
 		for (const module of this.program.modules) {
 			this.symbols.set(module, declarations(module));
 			this.types.set(module, new Map());
 			this.functions.set(module, new Map());
 			for (const declaration of module.ast.declarations) {
+				if (declaration.kind !== "use")
+					this.defineTypeParameters(declaration);
 				this.semantic.define(
 					declaration,
 					declaration.kind === "use"
@@ -172,148 +192,169 @@ export class CheckedProgram {
 		}
 		for (const module of this.program.modules) {
 			for (const declaration of module.ast.declarations) {
-				if (declaration.kind === "type")
-					this.namedType(module, declaration.name, declaration);
+				if (declaration.kind === "type") {
+					try {
+						this.namedType(module, declaration.name, declaration, [
+							...this.parameterScopes.get(declaration)!.values(),
+						]);
+					} catch (error) {
+						this.recoverError(error);
+					}
+				}
 			}
 			for (const declaration of module.ast.declarations) {
 				if (declaration.kind !== "function") continue;
-				if (
-					module.trusted &&
-					module.id === "std/typing" &&
-					declaration.name === "trycast"
-				) {
+				this.activeTypeParameters =
+					this.parameterScopes.get(declaration)!;
+				try {
 					if (
-						!declaration.public ||
-						declaration.native ||
-						declaration.body ||
-						declaration.params.length !== 2 ||
-						declaration.params.some((param) => param.mutable) ||
-						declaration.params[0]!.type.kind !== "name" ||
-						declaration.params[0]!.type.name !== "Type" ||
-						declaration.params[1]!.type.kind !== "name" ||
-						declaration.params[1]!.type.name !== "intrinsic" ||
-						declaration.result.kind !== "name" ||
-						declaration.result.name !== "intrinsic"
+						module.trusted &&
+						module.id === "std/typing" &&
+						declaration.name === "trycast"
+					) {
+						if (
+							!declaration.public ||
+							declaration.native ||
+							declaration.body ||
+							declaration.params.length !== 2 ||
+							declaration.params.some((param) => param.mutable) ||
+							declaration.params[0]!.type.kind !== "name" ||
+							declaration.params[0]!.type.name !== "Type" ||
+							declaration.params[1]!.type.kind !== "name" ||
+							declaration.params[1]!.type.name !== "intrinsic" ||
+							declaration.result.kind !== "name" ||
+							declaration.result.name !== "intrinsic"
+						)
+							this.fail(
+								declaration,
+								"Invalid compiler intrinsic trycast signature",
+							);
+						this.functions.get(module)!.set(declaration.name, {
+							declaration,
+							module,
+							params: [TYPE, INTRINSIC],
+							result: INTRINSIC,
+							intrinsic: "trycast",
+						});
+						this.semantic.update(
+							declaration,
+							undefined,
+							"fn trycast(target: Type, value: readonly value) -> T | throwable (T = target)",
+						);
+						continue;
+					}
+					if (!declaration.native && !declaration.body)
+						this.fail(
+							declaration,
+							"Only compiler intrinsic APIs may omit a function body",
+						);
+					const params = declaration.params.map((param) =>
+							this.resolveType(module, param.type),
+						),
+						result = this.resolveType(module, declaration.result);
+					if (
+						containsTSAny(result) ||
+						(params.some((type) => containsTSAny(type)) &&
+							(!declaration.native ||
+								params.some(
+									(type) =>
+										containsTSAny(type) &&
+										type.kind !== "tsany",
+								)))
+					) {
+						this.fail(
+							declaration,
+							"TSAny is allowed only as a direct private native input parameter",
+						);
+					}
+					if (
+						declaration.native &&
+						(!module.trusted ||
+							!module.id.startsWith("std/internal/") ||
+							declaration.public)
 					)
 						this.fail(
 							declaration,
-							"Invalid compiler intrinsic trycast signature",
+							"native fn must be private in a trusted std/internal module",
+						);
+					if (
+						declaration.native &&
+						declaration.params.some((param) => param.mutable)
+					)
+						this.fail(
+							declaration,
+							"Native mutable parameters are not supported",
+						);
+					if (declaration.public && containsTSAny(result))
+						this.fail(
+							declaration,
+							"Public signatures cannot expose TSAny",
 						);
 					this.functions.get(module)!.set(declaration.name, {
 						declaration,
 						module,
-						params: [TYPE, INTRINSIC],
-						result: INTRINSIC,
-						intrinsic: "trycast",
+						params,
+						result,
 					});
 					this.semantic.update(
 						declaration,
 						undefined,
-						"fn trycast(target: Type, value: readonly value) -> T | throwable (T = target)",
+						`fn ${declaration.name}${this.parameterLabel(declaration)}(${declaration.params.map((parameter, index) => `${parameter.mutable ? "mut " : ""}${parameter.name}: ${describe(params[index]!)}`).join(", ")}) -> ${describe(result)}`,
 					);
-					continue;
+				} catch (error) {
+					this.recoverError(error);
 				}
-				if (!declaration.native && !declaration.body)
-					this.fail(
-						declaration,
-						"Only compiler intrinsic APIs may omit a function body",
-					);
-				const params = declaration.params.map((param) =>
-						this.resolveType(module, param.type),
-					),
-					result = this.resolveType(module, declaration.result);
-				if (
-					containsTSAny(result) ||
-					(params.some((type) => containsTSAny(type)) &&
-						(!declaration.native ||
-							params.some(
-								(type) =>
-									containsTSAny(type) &&
-									type.kind !== "tsany",
-							)))
-				) {
-					this.fail(
-						declaration,
-						"TSAny is allowed only as a direct private native input parameter",
-					);
-				}
-				if (
-					declaration.native &&
-					(!module.trusted ||
-						!module.id.startsWith("std/internal/") ||
-						declaration.public)
-				)
-					this.fail(
-						declaration,
-						"native fn must be private in a trusted std/internal module",
-					);
-				if (
-					declaration.native &&
-					declaration.params.some((param) => param.mutable)
-				)
-					this.fail(
-						declaration,
-						"Native mutable parameters are not supported",
-					);
-				if (declaration.public && containsTSAny(result))
-					this.fail(
-						declaration,
-						"Public signatures cannot expose TSAny",
-					);
-				this.functions.get(module)!.set(declaration.name, {
-					declaration,
-					module,
-					params,
-					result,
-				});
-				this.semantic.update(
-					declaration,
-					undefined,
-					`fn ${declaration.name}(${declaration.params.map((parameter, index) => `${parameter.mutable ? "mut " : ""}${parameter.name}: ${describe(params[index]!)}`).join(", ")}) -> ${describe(result)}`,
-				);
 			}
 		}
 		for (const module of this.program.modules)
 			for (const fn of this.functions.get(module)!.values()) {
 				if (!fn.declaration.body) continue;
-				const scope = new Scope(
-					null,
-					this.semantic,
-					fn.declaration.body.range,
-				);
-				fn.declaration.params.forEach((param, index) =>
-					scope.add(
-						param.name,
-						{
-							type: fn.params[index]!,
-							mutable: param.mutable,
-							borrowed:
-								param.mutable ||
-								variants(fn.params[index]!).some(
-									(type) =>
-										type.kind === "struct" ||
-										type.kind === "array",
-								),
-						},
-						param,
-						"parameter",
-					),
-				);
-				const body = this.block(
-					fn.declaration.body,
-					scope,
-					module,
-					fn,
-					0,
-					fn.result,
-				);
-				this.require(body.type, fn.result, fn.declaration.body);
-				if (body.borrowed && body.type.kind !== "never")
-					this.fail(
-						fn.declaration.body,
-						"Returning borrowed storage requires snapshot",
+				this.activeTypeParameters = this.parameterScopes.get(
+					fn.declaration,
+				)!;
+				try {
+					const scope = new Scope(
+						null,
+						this.semantic,
+						fn.declaration.body.range,
 					);
+					fn.declaration.params.forEach((param, index) =>
+						scope.add(
+							param.name,
+							{
+								type: fn.params[index]!,
+								mutable: param.mutable,
+								borrowed:
+									param.mutable ||
+									variants(fn.params[index]!).some(
+										(type) =>
+											type.kind === "struct" ||
+											type.kind === "array",
+									),
+							},
+							param,
+							"parameter",
+						),
+					);
+					const body = this.block(
+						fn.declaration.body,
+						scope,
+						module,
+						fn,
+						0,
+						fn.result,
+					);
+					this.require(body.type, fn.result, fn.declaration.body);
+					if (body.borrowed && body.type.kind !== "never")
+						this.fail(
+							fn.declaration.body,
+							"Returning borrowed storage requires snapshot",
+						);
+				} catch (error) {
+					this.recoverError(error);
+				}
 			}
+		this.activeTypeParameters = new Map();
 		if (options.requireEntryPoint ?? true) this.checkEntryPoint();
 		return this;
 	}
@@ -321,6 +362,7 @@ export class CheckedProgram {
 		const main = this.functions.get(this.program.entry)!.get("main");
 		if (
 			!main ||
+			(main.declaration.typeParams?.length ?? 0) > 0 ||
 			main.params.length ||
 			!["void", "int32"].includes(main.result.kind)
 		)
@@ -328,6 +370,10 @@ export class CheckedProgram {
 				this.program.entry.ast,
 				"Entry point must be fn main() -> void or int32",
 			);
+	}
+	private recoverError(error: unknown): void {
+		if (!this.recovering || !(error instanceof LanguageError)) throw error;
+		this.resolving.clear();
 	}
 	private fail(node: Node, message: string): never {
 		throw new LanguageError(
@@ -343,18 +389,126 @@ export class CheckedProgram {
 				`Expected ${describe(expected)}, got ${describe(actual)}`,
 			);
 	}
-	private namedType(module: SourceModule, name: string, node: Node): Type {
+	private parameterLabel(
+		declaration: Exclude<Declaration, { kind: "use" }>,
+	): string {
+		return declaration.typeParams?.length
+			? "<" + declaration.typeParams.map((p) => p.name).join(", ") + ">"
+			: "";
+	}
+	private defineTypeParameters(
+		declaration: Exclude<Declaration, { kind: "use" }>,
+	): void {
+		const scope = new Map<string, Type>();
+		for (const parameter of declaration.typeParams ?? []) {
+			if (scope.has(parameter.name))
+				this.fail(
+					parameter,
+					"Duplicate type parameter '" + parameter.name + "'",
+				);
+			if (
+				builtins.has(parameter.name) ||
+				["Array", "TSAny", "intrinsic"].includes(parameter.name)
+			)
+				this.fail(
+					parameter,
+					"Builtin type names cannot be redeclared as type parameters",
+				);
+			const id =
+				parameter.span.file +
+				":" +
+				(parameter.nameRange?.start ??
+					parameter.span.line + ":" + parameter.span.column);
+			const type: Type = { kind: "parameter", id, name: parameter.name };
+			scope.set(parameter.name, type);
+			const symbol = this.semantic.define(
+				parameter,
+				parameter.name,
+				"type",
+				declaration.range,
+				{ type, detail: "type parameter " + parameter.name },
+			);
+			if (symbol) this.parameterSymbols.set(id, symbol);
+		}
+		if (
+			scope.size &&
+			((declaration.kind === "type" && declaration.compilerOnly) ||
+				(declaration.kind === "function" && declaration.native))
+		)
+			this.fail(
+				declaration,
+				"Compiler-only and native declarations cannot be generic",
+			);
+		this.parameterScopes.set(declaration, scope);
+	}
+	/** Explicit instantiation is shared by calls and editor signature help. */
+	instantiate(
+		fn: FunctionInfo,
+		args: TypeNode[],
+		module: SourceModule,
+		node: Node,
+		parameters = this.activeTypeParameters,
+	): FunctionInfo {
+		const formal = [...this.parameterScopes.get(fn.declaration)!.values()];
+		if (args.length !== formal.length)
+			this.fail(
+				node,
+				"Expected " +
+					formal.length +
+					" explicit type arguments, got " +
+					args.length,
+			);
+		const concrete = args.map((arg) =>
+			this.resolveType(module, arg, parameters),
+		);
+		if (concrete.some(containsTSAny))
+			this.fail(node, "TSAny cannot be a generic type argument");
+		const bindings = new Map(
+			formal.map((parameter, index) => [
+				(parameter as Extract<Type, { kind: "parameter" }>).id,
+				concrete[index]!,
+			]),
+		);
+		return {
+			...fn,
+			params: fn.params.map((type) => substitute(type, bindings)),
+			result: substitute(fn.result, bindings),
+			typeBindings: bindings,
+		};
+	}
+	private namedType(
+		module: SourceModule,
+		name: string,
+		node: Node,
+		args: Type[] = [],
+	): Type {
 		const builtin = builtins.get(name);
 		if (
 			builtin &&
 			!(name === "Type" && this.symbols.get(module)!.has(name))
-		)
+		) {
+			if (args.length)
+				this.fail(node, "Builtin type does not accept type arguments");
 			return builtin;
+		}
 		const cached = this.types.get(module)!.get(name);
-		if (cached) return cached;
+		if (cached && !args.length) return cached;
 		const declaration = this.symbols.get(module)!.get(name);
 		if (!declaration || declaration.kind !== "type")
 			return this.fail(node, `Unknown type '${name}'`);
+		const parameters = this.parameterScopes.get(declaration)!;
+		if (args.length !== parameters.size)
+			this.fail(
+				node,
+				"Expected " +
+					parameters.size +
+					" explicit type arguments for " +
+					name +
+					", got " +
+					args.length,
+			);
+		if (args.some(containsTSAny))
+			this.fail(node, "TSAny cannot be a generic type argument");
 		if (
 			builtins.has(declaration.name) &&
 			!(
@@ -390,7 +544,16 @@ export class CheckedProgram {
 				);
 			resolved = name === "Type" ? TYPE : TSANY;
 		} else {
-			resolved = this.resolveType(module, declaration.type);
+			resolved = this.resolveType(
+				module,
+				declaration.type,
+				new Map(
+					[...parameters.keys()].map((key, index) => [
+						key,
+						args[index]!,
+					]),
+				),
+			);
 			if (containsTSAny(resolved))
 				this.fail(
 					declaration,
@@ -398,17 +561,43 @@ export class CheckedProgram {
 				);
 		}
 		this.resolving.delete(declaration);
-		this.types.get(module)!.set(name, resolved);
-		this.semantic.update(
-			declaration,
-			resolved,
-			`type ${name} = ${describe(resolved)}`,
-		);
+		if (!parameters.size) this.types.get(module)!.set(name, resolved);
+		if (
+			!parameters.size ||
+			args.every((arg, index) => arg === [...parameters.values()][index])
+		)
+			this.semantic.update(
+				declaration,
+				resolved,
+				`type ${name}${this.parameterLabel(declaration)} = ${describe(resolved)}`,
+			);
 		return resolved;
 	}
-	resolveType(module: SourceModule, node: TypeNode): Type {
+	resolveType(
+		module: SourceModule,
+		node: TypeNode,
+		parameters = this.activeTypeParameters,
+	): Type {
 		switch (node.kind) {
 			case "name": {
+				const parameter = parameters.get(node.name);
+				if (parameter) {
+					if (node.typeArgs?.length)
+						this.fail(
+							node,
+							"Type parameters do not accept type arguments",
+						);
+					if (parameter.kind === "parameter")
+						this.semantic.reference(
+							node,
+							this.parameterSymbols.get(parameter.id),
+							parameter,
+						);
+					return parameter;
+				}
+				const args = (node.typeArgs ?? []).map((arg) =>
+					this.resolveType(module, arg, parameters),
+				);
 				if (node.name === "Type" || node.name === "intrinsic")
 					this.fail(
 						node,
@@ -416,7 +605,7 @@ export class CheckedProgram {
 					);
 				const parts = node.name.split(".");
 				if (parts.length === 1) {
-					const type = this.namedType(module, node.name, node);
+					const type = this.namedType(module, node.name, node, args);
 					const declaration = this.symbols
 						.get(module)!
 						.get(node.name);
@@ -442,7 +631,7 @@ export class CheckedProgram {
 						node,
 						`Unknown or private type '${node.name}'`,
 					);
-				const type = this.namedType(imported, parts[1]!, node);
+				const type = this.namedType(imported, parts[1]!, node, args);
 				this.semantic.reference(
 					node,
 					this.semantic.definition(declaration),
@@ -463,12 +652,12 @@ export class CheckedProgram {
 			case "array":
 				return {
 					kind: "array",
-					element: this.resolveType(module, node.element),
+					element: this.resolveType(module, node.element, parameters),
 				};
 			case "union":
 				return union(
 					node.members.map((member) =>
-						this.resolveType(module, member),
+						this.resolveType(module, member, parameters),
 					),
 				);
 			case "struct": {
@@ -478,7 +667,7 @@ export class CheckedProgram {
 						this.fail(node, `Duplicate field '${field.name}'`);
 					fields.set(
 						field.name,
-						this.resolveType(module, field.type),
+						this.resolveType(module, field.type, parameters),
 					);
 				}
 				return { kind: "struct", fields };
@@ -497,23 +686,31 @@ export class CheckedProgram {
 		let result = info(VOID);
 		const accumulated = new Set<Exit>();
 		for (const statement of block.statements) {
-			if (result.type.kind === "never")
-				this.fail(statement, "Unreachable statement");
-			result = this.statement(statement, scope, module, fn, loops);
-			result.exits.forEach((exit) => accumulated.add(exit));
+			try {
+				if (result.type.kind === "never")
+					this.fail(statement, "Unreachable statement");
+				result = this.statement(statement, scope, module, fn, loops);
+				result.exits.forEach((exit) => accumulated.add(exit));
+			} catch (error) {
+				this.recoverError(error);
+			}
 		}
 		if (block.tail) {
-			if (result.type.kind === "never")
-				this.fail(block.tail, "Unreachable block tail");
-			result = this.expression(
-				block.tail,
-				scope,
-				module,
-				fn,
-				loops,
-				expected,
-			);
-			result.exits.forEach((exit) => accumulated.add(exit));
+			try {
+				if (result.type.kind === "never")
+					this.fail(block.tail, "Unreachable block tail");
+				result = this.expression(
+					block.tail,
+					scope,
+					module,
+					fn,
+					loops,
+					expected,
+				);
+				result.exits.forEach((exit) => accumulated.add(exit));
+			} catch (error) {
+				this.recoverError(error);
+			}
 		}
 		return info(result.type, result.borrowed, accumulated, result.mutable);
 	}
@@ -1016,7 +1213,12 @@ export class CheckedProgram {
 				break;
 			}
 			case "call": {
-				const called = this.function(expression.callee, scope, module);
+				const called = this.instantiate(
+					this.function(expression.callee, scope, module),
+					expression.typeArgs ?? [],
+					module,
+					expression,
+				);
 				this.calls.set(expression, called);
 				if (called.intrinsic === "trycast") {
 					if (
@@ -1381,8 +1583,57 @@ export class CheckedProgram {
 				break;
 			}
 		}
+		if (result.type.kind === "int32") this.checkConstantInteger(expression);
 		this.expressionTypes.set(expression, result.type);
 		return result;
+	}
+	/** Literal integer arithmetic is checked exactly; no runtime expressions are evaluated. */
+	private checkConstantInteger(expression: Expression): void {
+		let value: bigint | undefined;
+		if (
+			expression.kind === "literal" &&
+			typeof expression.value === "number"
+		)
+			value = BigInt(expression.value);
+		else if (expression.kind === "snapshot")
+			value = this.constantIntegers.get(expression.value);
+		else if (expression.kind === "unary" && expression.op === "-") {
+			const operand =
+				expression.operand.kind === "literal" &&
+				expression.operand.value === 2147483648
+					? 2147483648n
+					: this.constantIntegers.get(expression.operand);
+			if (operand !== undefined) value = -operand;
+		} else if (expression.kind === "binary") {
+			const left = this.constantIntegers.get(expression.left);
+			const right = this.constantIntegers.get(expression.right);
+			if (left !== undefined && right !== undefined) {
+				switch (expression.op) {
+					case "+":
+						value = left + right;
+						break;
+					case "-":
+						value = left - right;
+						break;
+					case "*":
+						value = left * right;
+						break;
+					case "/":
+						if (right !== 0n) value = left / right;
+						break;
+					case "%":
+						if (right !== 0n) value = left % right;
+						break;
+				}
+			}
+		}
+		if (value === undefined) return;
+		if (value < -2147483648n || value > 2147483647n)
+			this.fail(
+				expression,
+				"int32 arithmetic overflow in constant expression",
+			);
+		this.constantIntegers.set(expression, value);
 	}
 	private referencesRoots(
 		expression: Expression,
@@ -1406,6 +1657,8 @@ export class CheckedProgram {
 }
 export interface CheckOptions {
 	requireEntryPoint?: boolean;
+	/** Produces partial information only; do not execute this program. */
+	editorRecovery?: boolean;
 }
 export function checkProgram(
 	program: Program,

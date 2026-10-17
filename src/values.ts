@@ -38,6 +38,7 @@ export function matches(value: unknown, type: Type): value is Value {
 		case "tsany":
 		case "meta":
 		case "intrinsic":
+		case "parameter":
 			return false;
 		case "array":
 			return (

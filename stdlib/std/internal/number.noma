@@ -1,0 +1,8 @@
+// Exact, recoverable arithmetic; never evaluate overflowing Noma operators first.
+native fn checkedAdd(a: int32, b: int32) -> int32 | throwable;
+native fn checkedSub(a: int32, b: int32) -> int32 | throwable;
+native fn checkedMul(a: int32, b: int32) -> int32 | throwable;
+
+pub fn add(a: int32, b: int32) -> int32 | throwable { return checkedAdd(a, b); }
+pub fn sub(a: int32, b: int32) -> int32 | throwable { return checkedSub(a, b); }
+pub fn mul(a: int32, b: int32) -> int32 | throwable { return checkedMul(a, b); }

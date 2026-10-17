@@ -1,0 +1,73 @@
+use "std/string" as str;
+use "std/number" as num;
+use "std/io" as io;
+
+pub fn main() -> int32 {
+	let text: string = "A😀B😀";
+	if str.length(text) != 4 || str.length("") != 0 || str.length("e\u0301") != 2 { return 1; }
+	if !str.isEmpty("") || str.isEmpty(text) { return 2; }
+	if !str.contains(text, "😀B") || str.contains(text, "C") { return 3; }
+	if !str.startsWith(text, "A😀") || !str.endsWith(text, "B😀") { return 4; }
+	if str.startsWith("A", "AB") || str.endsWith("A", "BA") { return 5; }
+	if str.indexOf(text, "B") != 2 || str.indexOf(text, "😀") != 1 || str.indexOf(text, "C") != -1 { return 6; }
+	let emoji: string = str.slice(text, 1, 2) catch e { return 7; };
+	if emoji != "😀" { return 8; }
+	let empty: string = str.slice("", 0, 0) catch e { return 9; };
+	let tail: string = str.slice(text, 4, 4) catch e { return 10; };
+	if empty != "" || tail != "" { return 11; }
+	if (str.slice(text, -1, 1) otherwise e { "error" }) != "error" { return 12; }
+	if (str.slice(text, 2, 1) otherwise e { "error" }) != "error" { return 13; }
+	if (str.slice(text, 0, 5) otherwise e { "error" }) != "error" { return 14; }
+	if (str.slice("", 1, 1) otherwise e { "error" }) != "error" { return 15; }
+	if str.replace(text, "😀", "!") != "A!B😀" { return 16; }
+	if str.replaceAll(text, "😀", "!") != "A!B!" { return 17; }
+	if str.replaceAll("aaa", "aa", "x") != "xa" { return 18; }
+	if str.replaceAll("a", "a", "$&") != "$&" { return 19; }
+	if str.replace(text, "C", "!") != text || text != "A😀B😀" { return 20; }
+	if !str.contains("", "") || !str.startsWith(text, "") || !str.endsWith(text, "") { return 21; }
+	if str.indexOf(text, "") != 0 || str.indexOf("", "x") != -1 { return 22; }
+	if str.replace("😀", "", "-") != "-😀" || str.replaceAll("😀", "", "-") != "-😀-" { return 23; }
+	if str.replaceAll("", "", "-") != "-" { return 24; }
+	if str.trim("\t\n\r\u000b\u000c Hello 😀 \t") != "Hello 😀" { return 25; }
+	if str.trim("\u00a0x\u00a0") != "\u00a0x\u00a0" { return 26; }
+	if str.toUpperCase("aZéß😀") != "AZéß😀" || str.toLowerCase("AzÉ😀") != "azÉ😀" { return 27; }
+	if (str.repeat("😀a", 3) otherwise e { "error" }) != "😀a😀a😀a" { return 28; }
+	if (str.repeat(text, 0) otherwise e { "error" }) != "" { return 29; }
+	if (str.repeat("", 2147483647) otherwise e { "error" }) != "" { return 30; }
+	if (str.repeat(text, -1) otherwise e { "error" }) != "error" { return 31; }
+	if (str.repeat("ab", 2147483647) otherwise e { "error" }) != "error" { return 32; }
+	let mut mutableText: string = "Hello";
+	let size: int32 = str.length(snapshot mutableText);
+	let saved: string = str.toUpperCase(snapshot mutableText);
+	if size != 5 || saved != "HELLO" || mutableText != "Hello" { return 33; }
+	mutableText = "changed";
+	if saved != "HELLO" { return 34; }
+
+	if (num.absInt32(-7) otherwise e { 0 }) != 7 || (num.absInt32(7) otherwise e { 0 }) != 7 { return 40; }
+	if (num.absInt32(-2147483648) otherwise e { -1 }) != -1 { return 41; }
+	if num.minInt32(-2147483648, 2147483647) != -2147483648 { return 42; }
+	if num.maxInt32(-2147483648, 2147483647) != 2147483647 { return 43; }
+	if (num.clampInt32(-9, -3, 3) otherwise e { 99 }) != -3 { return 44; }
+	if (num.clampInt32(9, -3, 3) otherwise e { 99 }) != 3 { return 45; }
+	if (num.clampInt32(1, -3, 3) otherwise e { 99 }) != 1 { return 46; }
+	if (num.clampInt32(1, 3, -3) otherwise e { 99 }) != 99 { return 47; }
+	if num.int32ToString(-2147483648) != "-2147483648" || num.int32ToString(2147483647) != "2147483647" { return 48; }
+	if num.int32ToString(0) != "0" || num.int32ToString(10) != "10" || num.int32ToString(-10) != "-10" { return 49; }
+	if (num.parseInt32("-2147483648") otherwise e { 0 }) != -2147483648 { return 50; }
+	if (num.parseInt32("+2147483647") otherwise e { 0 }) != 2147483647 { return 51; }
+	if (num.parseInt32("-00012") otherwise e { 0 }) != -12 { return 52; }
+	if (num.parseInt32("2147483648") otherwise e { 99 }) != 99 { return 53; }
+	if (num.parseInt32("-2147483649") otherwise e { 99 }) != 99 { return 54; }
+	if (num.parseInt32(" 1") otherwise e { 99 }) != 99 || (num.parseInt32("1 ") otherwise e { 99 }) != 99 { return 55; }
+	if (num.parseInt32("") otherwise e { 99 }) != 99 || (num.parseInt32("+") otherwise e { 99 }) != 99 { return 56; }
+	if (num.parseInt32("1.2") otherwise e { 99 }) != 99 || (num.parseInt32("１２") otherwise e { 99 }) != 99 { return 57; }
+	if (num.checkedAddInt32(2147483647, 1) otherwise e { 99 }) != 99 { return 58; }
+	if (num.checkedSubInt32(-2147483648, 1) otherwise e { 99 }) != 99 { return 59; }
+	if (num.checkedMulInt32(-2147483648, -1) otherwise e { 99 }) != 99 { return 60; }
+	if (num.checkedMulInt32(2147483647, 2147483647) otherwise e { 99 }) != 99 { return 61; }
+	if (num.checkedAddInt32(2147483647, 0) otherwise e { 0 }) != 2147483647 { return 62; }
+	if (num.checkedSubInt32(-2147483648, 0) otherwise e { 0 }) != -2147483648 { return 63; }
+	if (num.checkedMulInt32(-1073741824, 2) otherwise e { 0 }) != -2147483648 { return 64; }
+	io.stdoutWrite(emoji + " " + num.int32ToString(size)) catch e { return 65; };
+	return 0;
+}

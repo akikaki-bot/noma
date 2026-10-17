@@ -175,9 +175,18 @@ export class SemanticIndex {
 				)
 			: [];
 	}
-	visibleSymbols(file: string, offset: number): SemanticSymbol[] {
+	visibleSymbols(
+		file: string,
+		offset: number,
+		typesOnly: boolean | "value" = false,
+	): SemanticSymbol[] {
 		const candidates = [...this.symbols.values()].filter(
 			(symbol) =>
+				(typesOnly === "value"
+					? symbol.kind !== "type"
+					: !typesOnly ||
+						symbol.kind === "type" ||
+						symbol.kind === "module") &&
 				!symbol.hidden &&
 				(!symbol.type || !containsTSAny(symbol.type)) &&
 				symbol.scope.file === file &&
@@ -229,7 +238,7 @@ export class SemanticIndex {
 		offset: number,
 		alias: string,
 	): SemanticSymbol[] {
-		const module = this.visibleSymbols(file, offset).find(
+		const module = this.visibleSymbols(file, offset, "value").find(
 			(symbol) => symbol.name === alias,
 		)?.targetModule;
 		if (!module) return [];

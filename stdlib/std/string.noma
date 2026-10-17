@@ -1,0 +1,145 @@
+use "std/internal/string" as unicode;
+
+pub fn length(text: string) -> int32 { return unicode.length(text); }
+pub fn isEmpty(text: string) -> bool { return length(text) == 0; }
+
+// Private helpers: callers validate scalar strings and bounds using length first.
+// The fallbacks are unreachable for those validated inputs.
+fn point(text: string, index: int32) -> int32 {
+	return unicode.at(text, index) otherwise e { -1 };
+}
+fn character(text: string, index: int32) -> string {
+	return unicode.from(point(text, index)) otherwise e { "" };
+}
+fn copyRange(text: string, start: int32, end: int32) -> string {
+	let mut result: string = "";
+	let mut index: int32 = start;
+	while index < end {
+		result = result + character(text, snapshot index);
+		index = index + 1;
+	}
+	return snapshot result;
+}
+fn matchesAt(text: string, search: string, start: int32, size: int32) -> bool {
+	let mut index: int32 = 0;
+	while index < size {
+		if point(text, start + index) != point(search, snapshot index) { return false; }
+		index = index + 1;
+	}
+	return true;
+}
+
+pub fn startsWith(text: string, prefix: string) -> bool {
+	let size: int32 = length(text);
+	let prefixSize: int32 = length(prefix);
+	if prefixSize > size { return false; }
+	return matchesAt(text, prefix, 0, prefixSize);
+}
+pub fn endsWith(text: string, suffix: string) -> bool {
+	let size: int32 = length(text);
+	let suffixSize: int32 = length(suffix);
+	if suffixSize > size { return false; }
+	return matchesAt(text, suffix, size - suffixSize, suffixSize);
+}
+pub fn indexOf(text: string, search: string) -> int32 {
+	let size: int32 = length(text);
+	let searchSize: int32 = length(search);
+	if searchSize == 0 { return 0; }
+	if searchSize > size { return -1; }
+	let mut index: int32 = 0;
+	while index <= size - searchSize {
+		if matchesAt(text, search, snapshot index, searchSize) { return snapshot index; }
+		index = index + 1;
+	}
+	return -1;
+}
+pub fn contains(text: string, search: string) -> bool { return indexOf(text, search) >= 0; }
+
+pub fn slice(text: string, start: int32, end: int32) -> string | throwable {
+	// at also validates the whole string when it has any codepoints.
+	if text != "" { unicode.at(text, 0) catch e { raise e; }; }
+	let size: int32 = length(text);
+	if start < 0 || end < start || end > size { raise "slice: index out of bounds"; }
+	return copyRange(text, start, end);
+}
+
+fn replaceImpl(text: string, search: string, replacement: string, all: bool) -> string {
+	let size: int32 = length(text);
+	let searchSize: int32 = length(search);
+	length(replacement);
+	let mut result: string = "";
+	let mut index: int32 = 0;
+	// Experimental policy: an empty search matches codepoint boundaries.
+	if searchSize == 0 {
+		if !all { return replacement + text; }
+		result = replacement;
+		while index < size {
+			result = result + character(text, snapshot index) + replacement;
+			index = index + 1;
+		}
+		return snapshot result;
+	}
+	while index < size {
+		if searchSize <= size - index && matchesAt(text, search, snapshot index, searchSize) {
+			result = result + replacement;
+			index = index + searchSize;
+			if !all { return result + copyRange(text, snapshot index, size); }
+		} else {
+			result = result + character(text, snapshot index);
+			index = index + 1;
+		}
+	}
+	return snapshot result;
+}
+pub fn replace(text: string, search: string, replacement: string) -> string {
+	return replaceImpl(text, search, replacement, false);
+}
+pub fn replaceAll(text: string, search: string, replacement: string) -> string {
+	return replaceImpl(text, search, replacement, true);
+}
+
+// ASCII-only whitespace: TAB, LF, VT, FF, CR and SPACE. Other scalars are preserved.
+fn asciiWhitespace(codepoint: int32) -> bool {
+	return codepoint == 32 || (codepoint >= 9 && codepoint <= 13);
+}
+pub fn trim(text: string) -> string {
+	let size: int32 = length(text);
+	let mut start: int32 = 0;
+	let mut end: int32 = size;
+	while start < end && asciiWhitespace(point(text, snapshot start)) { start = start + 1; }
+	while end > start && asciiWhitespace(point(text, end - 1)) { end = end - 1; }
+	return copyRange(text, snapshot start, snapshot end);
+}
+// ASCII-only case conversion; non-ASCII scalars are preserved without normalization.
+fn asciiCase(text: string, upper: bool) -> string {
+	let size: int32 = length(text);
+	let mut result: string = "";
+	let mut index: int32 = 0;
+	while index < size {
+		let mut codepoint: int32 = point(text, snapshot index);
+		if upper && codepoint >= 97 && codepoint <= 122 { codepoint = codepoint - 32; }
+		if !upper && codepoint >= 65 && codepoint <= 90 { codepoint = codepoint + 32; }
+		result = result + (unicode.from(snapshot codepoint) otherwise e { "" });
+		index = index + 1;
+	}
+	return snapshot result;
+}
+pub fn toUpperCase(text: string) -> string { return asciiCase(text, true); }
+pub fn toLowerCase(text: string) -> string { return asciiCase(text, false); }
+
+pub fn repeat(text: string, count: int32) -> string | throwable {
+	if count < 0 { raise "repeat: count must be nonnegative"; }
+	if text != "" { unicode.at(text, 0) catch e { raise e; }; }
+	let size: int32 = length(text);
+	if size == 0 || count == 0 { return ""; }
+	if count > 2147483647 / size { raise "repeat: codepoint length exceeds int32"; }
+	let mut result: string = "";
+	let mut chunk: string = text;
+	let mut remaining: int32 = count;
+	while remaining > 0 {
+		if remaining % 2 == 1 { result = result + chunk; }
+		remaining = remaining / 2;
+		if remaining > 0 { chunk = chunk + chunk; }
+	}
+	return snapshot result;
+}

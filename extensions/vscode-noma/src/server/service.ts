@@ -11,6 +11,7 @@ import type {
 	Location,
 	Position,
 	PublishDiagnosticsParams,
+	SignatureHelp,
 } from "vscode-languageserver/node";
 
 interface Group {
@@ -267,22 +268,30 @@ export class NomaLanguageService {
 		const snapshot = await this.snapshot(uri),
 			document = this.documents.get(uri);
 		if (!snapshot || !document) return [];
-		const prefix = document.getText().slice(0, document.offsetAt(position));
-		const alias = /\b([A-Za-z_][A-Za-z_0-9]*)\s*\.\s*[A-Za-z_0-9]*$/.exec(
-			prefix,
-		)?.[1];
-		return snapshot.completions(uri, position, alias).map((item) => ({
+		return snapshot.completionItems(uri, position).map((item) => ({
 			label: item.label,
 			detail: item.detail,
+			insertText: item.insertText,
+			textEdit: { range: item.range, newText: item.insertText },
 			kind:
-				item.kind === "function"
-					? CompletionItemKind.Function
-					: item.kind === "type"
-						? CompletionItemKind.Class
-						: item.kind === "module"
-							? CompletionItemKind.Module
-							: CompletionItemKind.Variable,
+				item.kind === "keyword"
+					? CompletionItemKind.Keyword
+					: item.kind === "field"
+						? CompletionItemKind.Field
+						: item.kind === "function"
+							? CompletionItemKind.Function
+							: item.kind === "type"
+								? CompletionItemKind.Class
+								: item.kind === "module"
+									? CompletionItemKind.Module
+									: CompletionItemKind.Variable,
 		}));
+	}
+	async signatureHelp(
+		uri: string,
+		position: Position,
+	): Promise<SignatureHelp | null> {
+		return (await this.snapshot(uri))?.signatureHelp(uri, position) ?? null;
 	}
 
 	async references(

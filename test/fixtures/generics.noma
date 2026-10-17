@@ -1,0 +1,30 @@
+type Box<T> = struct { value: T; };
+type Pair<T, U> = struct { first: T; second: U; };
+type IntBox = struct { value: int32; };
+
+fn identity<T>(value: T) -> T { return value; }
+fn forward<U>(value: U) -> U { return identity<U>(value); }
+fn replace<T>(mut target: T, value: T) -> void { target = value; }
+fn wrap<T>(value: T) -> Box<T> { return Box<T> { value: value }; }
+fn copyBox<T>(value: Box<T>) -> Box<T> { return snapshot value; }
+fn select<T, U>(first: T, second: U) -> U { return second; }
+
+pub fn main() -> int32 {
+	let a: int32 = identity<int32>(42);
+	let text: string = identity<string>("Alice");
+	let pair: Pair<string, int32> = Pair<string, int32> { first: text, second: a };
+	let nested: Box<Box<int32>> = Box<Box<int32>> { value: wrap<int32>(pair.second) };
+	let compatible: IntBox = copyBox<int32>(nested.value);
+	let unionBox: Box<int32 | string> = Box<int32 | string> { value: "Hello" };
+	let mut x: int32 = 10;
+	replace<int32>(x, forward<int32>(compatible.value));
+	let saved: int32 = identity<int32>(snapshot x);
+	let mut data: Box<int32>[] = [wrap<int32>(saved)];
+	let independent: Box<int32>[] = identity<Box<int32>[]>(snapshot data);
+	data[0].value = 1;
+	let selected: int32 = select<string, int32>(text, independent[0].value);
+	return match unionBox.value {
+		case (s: string) { selected }
+		case (n: int32) { n }
+	};
+}

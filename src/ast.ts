@@ -24,9 +24,12 @@ export interface Node {
 	nameRange?: SourceRange;
 	qualifierRange?: SourceRange;
 }
+export interface TypeParameter extends Node {
+	name: string;
+}
 export type TypeNode = Node &
 	(
-		| { kind: "name"; name: string }
+		| { kind: "name"; name: string; typeArgs?: TypeNode[] }
 		| { kind: "union"; members: TypeNode[] }
 		| { kind: "struct"; fields: { name: string; type: TypeNode }[] }
 		| { kind: "array"; element: TypeNode }
@@ -42,6 +45,7 @@ export type Declaration = Node &
 		| {
 				kind: "type";
 				name: string;
+				typeParams?: TypeParameter[];
 				type: TypeNode;
 				public: boolean;
 				compilerOnly: boolean;
@@ -49,6 +53,7 @@ export type Declaration = Node &
 		| {
 				kind: "function";
 				name: string;
+				typeParams?: TypeParameter[];
 				params: Parameter[];
 				result: TypeNode;
 				body: Block | null;
@@ -93,7 +98,12 @@ export type Expression = Node &
 		| { kind: "identifier"; name: string }
 		| { kind: "member"; object: Expression; name: string }
 		| { kind: "index"; object: Expression; index: Expression }
-		| { kind: "call"; callee: Expression; args: Argument[] }
+		| {
+				kind: "call";
+				callee: Expression;
+				args: Argument[];
+				typeArgs?: TypeNode[];
+		  }
 		| { kind: "binary"; op: string; left: Expression; right: Expression }
 		| { kind: "unary"; op: string; operand: Expression }
 		| { kind: "snapshot"; value: Expression }

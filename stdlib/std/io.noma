@@ -7,6 +7,11 @@ pub fn write(text: string) -> void | throwable {
 	return nativeIO.stdoutWrite(text);
 }
 
+// Explicit stdout name alongside the existing write API.
+pub fn stdoutWrite(text: string) -> void | throwable {
+	return nativeIO.stdoutWrite(text);
+}
+
 pub fn puts(text: string) -> void | throwable {
 	return write(text + "\n");
 }

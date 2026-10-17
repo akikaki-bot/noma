@@ -3,6 +3,7 @@ import { LanguageError } from "./ast.js";
 import type { CheckedProgram, FunctionInfo } from "./checker.js";
 import {
 	EOF_TYPE,
+	INT32,
 	equivalent,
 	STRING,
 	THROWABLE,
@@ -12,6 +13,13 @@ import {
 import type { Type } from "./types.js";
 import { clone, hostError, matches } from "./values.js";
 import type { Value } from "./values.js";
+import {
+	checkedInt32,
+	codepointAt,
+	codepointLength,
+	fromCodepoint,
+	NativeRuntimeError,
+} from "./stdlib-native.js";
 
 export interface IOHost {
 	writeStdout(text: string): Promise<void>;
@@ -71,9 +79,15 @@ export class NativeRegistry {
 				fn.declaration.span,
 				"Native input contract violation",
 			);
-		const result = await binding.invoke(
-			args.map((value) => clone(value, true)),
-		);
+		let result: unknown;
+		try {
+			result = await binding.invoke(
+				args.map((value) => clone(value, true)),
+			);
+		} catch (error) {
+			if (!(error instanceof NativeRuntimeError)) throw error;
+			throw new LanguageError(fn.declaration.span, error.message);
+		}
 		if (!matches(result, binding.result) || !matches(result, fn.result))
 			throw new LanguageError(
 				fn.declaration.span,
@@ -85,6 +99,7 @@ export class NativeRegistry {
 export function createIORegistry(host: IOHost): NativeRegistry {
 	const registry = new NativeRegistry(),
 		outputResult = union([VOID, THROWABLE]);
+	registerCoreNatives(registry);
 	for (const [name, write] of [
 		["writeStdout", host.writeStdout.bind(host)],
 		["writeStderr", host.writeStderr.bind(host)],
@@ -114,6 +129,38 @@ export function createIORegistry(host: IOHost): NativeRegistry {
 		},
 	});
 	return registry;
+}
+
+/** Pure standard-library bindings also belong to the default I/O registry. */
+export function registerCoreNatives(registry: NativeRegistry): void {
+	registry.register("std/internal/string#codepointLength", {
+		inputs: [STRING],
+		result: INT32,
+		invoke: async (args) => codepointLength(args[0] as string),
+	});
+	registry.register("std/internal/string#codepointAt", {
+		inputs: [STRING, INT32],
+		result: union([INT32, THROWABLE]),
+		invoke: async (args) =>
+			codepointAt(args[0] as string, args[1] as number),
+	});
+	registry.register("std/internal/string#fromCodepoint", {
+		inputs: [INT32],
+		result: union([STRING, THROWABLE]),
+		invoke: async (args) => fromCodepoint(args[0] as number),
+	});
+	for (const [name, op] of [
+		["checkedAdd", "+"],
+		["checkedSub", "-"],
+		["checkedMul", "*"],
+	] as const) {
+		registry.register(`std/internal/number#${name}`, {
+			inputs: [INT32, INT32],
+			result: union([INT32, THROWABLE]),
+			invoke: async (args) =>
+				checkedInt32(op, args[0] as number, args[1] as number),
+		});
+	}
 }
 
 /** Lazy, incremental UTF-8 input: no read occurs until the first readLine call. */

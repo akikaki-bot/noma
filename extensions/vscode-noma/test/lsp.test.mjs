@@ -271,10 +271,13 @@ test("syntax, type and mut/snapshot diagnostics update incrementally and clear o
 		await host.request("hover", target, position(text, "value")),
 		null,
 	);
-	assert.deepEqual(
-		await host.request("completion", target, position(text, "saved")),
-		[],
+	const recovered = await host.request(
+		"completion",
+		target,
+		position(text, "saved"),
 	);
+	assert.ok(recovered.some((item) => item.label === "value"));
+	assert.ok(!recovered.some((item) => item.label === "saved"));
 	text = "fn f() -> void { let n: int32 =";
 	await host.change(target, text);
 	const syntax = await host.diagnostics(
@@ -622,5 +625,144 @@ fn f() -> void {
 	await host.diagnostics(
 		target,
 		(item) => item.version === 3 && item.diagnostics.length === 0,
+	);
+});
+
+test("completion and signature capabilities include generic and argument triggers", async (t) => {
+	const host = await start(t);
+	assert.deepEqual(
+		host.initialization.capabilities.completionProvider.triggerCharacters,
+		[".", "<"],
+	);
+	assert.deepEqual(
+		host.initialization.capabilities.signatureHelpProvider
+			.triggerCharacters,
+		["(", ","],
+	);
+});
+
+test("JSON-RPC completion recovers module members, concrete generic fields and keyword edits", async (t) => {
+	const host = await start(t, {
+		"helper.noma":
+			"pub fn identity<T>(v:T)->T{return v;} pub type Box<T>=struct{value:T;}; fn secret()->void{} type Private=int32;",
+	});
+	let text = 'use "helper" as h; fn f()->void { h. }';
+	const target = await host.open("complete.noma", text);
+	let items = await host.request(
+		"completion",
+		target,
+		position(text, "h. }", 2),
+	);
+	assert.deepEqual(items.map((i) => i.label).sort(), ["Box", "identity"]);
+	assert.equal(items.find((i) => i.label === "identity").kind, 3);
+	await host.diagnostics(target, (d) => d.diagnostics[0]?.code === "syntax");
+	text =
+		"type Box<T>=struct{value:T;}; fn f()->void {let b:Box<int32>=Box<int32>{value:1}; b. }";
+	await host.change(target, text);
+	const point = position(text, "b. }", 2);
+	items = await host.request("completion", target, point);
+	assert.deepEqual(
+		items.map((i) => i.label),
+		["value"],
+	);
+	assert.equal(items[0].kind, 5);
+	assert.equal(items[0].detail, "value: int32");
+	assert.deepEqual(items[0].textEdit, {
+		newText: "value",
+		range: { start: point, end: point },
+	});
+	text = 'fn f()->void { let text:string="🌱"; ret }';
+	await host.change(target, text);
+	items = await host.request(
+		"completion",
+		target,
+		position(text, "ret }", 3),
+	);
+	assert.deepEqual(
+		items.map((i) => i.label),
+		["return"],
+	);
+	assert.equal(items[0].kind, 14);
+	assert.deepEqual(items[0].textEdit.range.start, position(text, "ret }"));
+	assert.equal(items[0].insertText, "return");
+});
+
+test("JSON-RPC incomplete identifier/type completion respects scopes and shadowing", async (t) => {
+	const host = await start(t);
+	let text =
+		'fn id<T>(v:T)->T{return v;} fn f(arg:bool)->void { let user:string="a"; {let sibling:int32=1;} {let user:int32=1; user } let later:int32=2;}';
+	const target = await host.open("scopes-complete.noma", text);
+	let items = await host.request(
+		"completion",
+		target,
+		position(text, "user }", 4),
+	);
+	assert.deepEqual(
+		items.map((i) => i.label),
+		["user"],
+	);
+	assert.match(items[0].detail, /int32/);
+	text = "fn id<T>(v:T)->T{return v;} fn f<U>(value:U)->void { id<";
+	await host.change(target, text);
+	items = await host.request(
+		"completion",
+		target,
+		TextDocument.create("", "noma", 1, text).positionAt(
+			text.lastIndexOf("id<") + 3,
+		),
+	);
+	assert.ok(items.some((i) => i.label === "U"));
+	assert.ok(items.some((i) => i.label === "int32"));
+	assert.ok(
+		!items.some((i) => ["value", "T", "id", "return"].includes(i.label)),
+	);
+});
+
+test("JSON-RPC signature help highlights arguments and instantiates generics without clearing diagnostics", async (t) => {
+	const host = await start(t);
+	let text =
+		"fn add(a:int32,b:int32)->int32{return a+b;} fn f()->int32{return add(1, );}";
+	const target = await host.open("signature.noma", text);
+	let help = await host.request(
+		"signatureHelp",
+		target,
+		position(text, "1, ", 3),
+	);
+	assert.equal(help.signatures[0].label, "add(a: int32, b: int32) -> int32");
+	assert.equal(help.activeParameter, 1);
+	assert.deepEqual(
+		help.signatures[0].parameters.map((p) => p.label),
+		["a: int32", "b: int32"],
+	);
+	await host.diagnostics(target, (d) =>
+		/Expected 2 arguments/.test(d.diagnostics[0]?.message),
+	);
+	text =
+		"fn identity<T>(value:T)->T{return value;} fn f()->void {identity<string>(";
+	await host.change(target, text);
+	help = await host.request(
+		"signatureHelp",
+		target,
+		position(text, "identity<string>(", 17),
+	);
+	assert.equal(
+		help.signatures[0].label,
+		"identity<string>(value: string) -> string",
+	);
+	assert.equal(help.activeParameter, 0);
+	text =
+		"fn identity<T>(value:T)->T{return value;} fn f()->void {identity<int32,string>();}";
+	await host.change(target, text);
+	help = await host.request(
+		"signatureHelp",
+		target,
+		position(text, "string>(", 8),
+	);
+	assert.equal(help, null);
+	await host.diagnostics(
+		target,
+		(d) =>
+			d.version === 3 &&
+			/explicit type arguments/.test(d.diagnostics[0]?.message),
 	);
 });

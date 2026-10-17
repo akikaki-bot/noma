@@ -1,0 +1,12 @@
+use "std/string" as str;
+use "std/number" as num;
+use "std/io" as io;
+
+pub fn main() -> int32 {
+	let text: string = "A😀B";
+	let length: int32 = str.length(text);
+	let emoji: string = str.slice(text, 1, 2) catch e { return 1; };
+	let result: int32 = num.checkedAddInt32(10, 20) otherwise e { 0 };
+	io.stdoutWrite(emoji + " " + num.int32ToString(length) + " " + num.int32ToString(result)) catch e { return 1; };
+	return 0;
+}

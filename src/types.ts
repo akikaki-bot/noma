@@ -1,4 +1,5 @@
 export type Type =
+	| { kind: "parameter"; name: string; id: string }
 	| {
 			kind:
 				| "string"
@@ -40,6 +41,8 @@ export const builtins = new Map<string, Type>([
 ]);
 export function describe(type: Type): string {
 	switch (type.kind) {
+		case "parameter":
+			return type.name;
 		case "struct":
 			return `struct { ${[...type.fields].map(([name, value]) => `${name}: ${describe(value)};`).join(" ")} }`;
 		case "array":
@@ -61,6 +64,8 @@ export function assignable(source: Type, target: Type): boolean {
 	if (target.kind === "union")
 		return target.members.some((member) => assignable(source, member));
 	if (source.kind !== target.kind) return false;
+	if (source.kind === "parameter" && target.kind === "parameter")
+		return source.id === target.id;
 	if (source.kind === "struct" && target.kind === "struct")
 		return (
 			source.fields.size === target.fields.size &&
@@ -85,6 +90,8 @@ export function projectable(source: Type, target: Type): boolean {
 			) !== undefined
 		);
 	if (source.kind !== target.kind) return false;
+	if (source.kind === "parameter" && target.kind === "parameter")
+		return source.id === target.id;
 	if (source.kind === "struct" && target.kind === "struct")
 		return [...target.fields].every(([key, type]) => {
 			const field = source.fields.get(key);
@@ -112,6 +119,8 @@ export function patternCovers(source: Type, pattern: Type): boolean {
 	if (pattern.kind === "union")
 		return pattern.members.some((member) => patternCovers(source, member));
 	if (source.kind !== pattern.kind) return false;
+	if (source.kind === "parameter" && pattern.kind === "parameter")
+		return source.id === pattern.id;
 	if (source.kind === "struct" && pattern.kind === "struct")
 		return [...pattern.fields].every(([key, type]) => {
 			const field = source.fields.get(key);
@@ -157,6 +166,8 @@ export function variants(type: Type): Type[] {
 /** Conservative overlap check; array types overlap at least at the empty array. */
 export function overlaps(a: Type, b: Type): boolean {
 	if (a.kind === "never" || b.kind === "never") return false;
+	// An unconstrained parameter can instantiate to any runtime type.
+	if (a.kind === "parameter" || b.kind === "parameter") return true;
 	if (a.kind === "union")
 		return a.members.some((member) => overlaps(member, b));
 	if (b.kind === "union")
@@ -169,4 +180,36 @@ export function overlaps(a: Type, b: Type): boolean {
 		);
 	}
 	return true;
+}
+
+/** Capture-free substitution by declaration identity, including nested shapes. */
+export function substitute(
+	type: Type,
+	bindings: ReadonlyMap<string, Type>,
+): Type {
+	switch (type.kind) {
+		case "parameter":
+			return bindings.get(type.id) ?? type;
+		case "array":
+			return {
+				kind: "array",
+				element: substitute(type.element, bindings),
+			};
+		case "struct":
+			return {
+				kind: "struct",
+				fields: new Map(
+					[...type.fields].map(([name, field]) => [
+						name,
+						substitute(field, bindings),
+					]),
+				),
+			};
+		case "union":
+			return union(
+				type.members.map((member) => substitute(member, bindings)),
+			);
+		default:
+			return type;
+	}
 }

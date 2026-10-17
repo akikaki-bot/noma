@@ -1,6 +1,6 @@
 # LSP向け処理系API
 
-2026-10-15。`editor-support.md`の第二段階に向けた、通信層に依存しないAPI。既存のLexer / Parser / Checkerを共有し、解析経路でInterpreter・Native Registry・NomaのI/Oを実行しない。LSPサーバー・JSON-RPC・VS Codeクライアントは今回のAPIに含まない。
+2026-10-16更新。`editor-support.md`の第二段階に向けた、通信層に依存しないAPI。既存のLexer / Parser / Checkerを共有し、解析経路でInterpreter・Native Registry・NomaのI/Oを実行しない。通信層は `extensions/vscode-noma/src/server/` に分離し、JSON-RPCテストを提供する。
 
 ビルド後はESMの `noma/compiler`、`noma/analysis`、`noma/workspace`、`noma/source` から利用できる。処理系とサーバーを一緒にバンドルする場合も、解析専用の入口を使い、`stdlibRoot`を明示する。`noma`本体からも再公開するが、本体には実行器のAPIも含む。
 
@@ -92,18 +92,20 @@ const location = snapshot.definition(uri, position);
 const references = snapshot.references(uri, position, true); // 宣言も含める
 const localNames = snapshot.completions(uri, position);
 const ioMembers = snapshot.completions(uri, position, "io");
+const items = snapshot.completionItems(uri, position); // キーワード・フィールド・回復情報を含む
+const signature = snapshot.signatureHelp(uri, position);
 ```
 
 Hoverはプレーンテキストの `contents` とRange。定義・参照はURIとRange。補完はlabel / detail / kind / mutable / definitionを返す。サーバー側でLSPのCompletionItemKindやMarkupContentへ変換する。moduleの候補はpubに限定し、内部nativeや特権TSAnyを候補から除く。一般値によりaliasが隠れている場合、そのaliasのメンバー候補も返さない。
 
 ## 現時点の制限と検証
 
-- 診断は最初の1件。Parserの回復・複数診断は未実装。
-- Hover・補完・定義・参照は**全体の型検査に成功したsnapshot用**。`io.`など未完成構文の途中補完はまだ提供しない。失敗した最新snapshotの問い合わせは空になる。
+- 診断は最初の1件。補完専用にParserの回復と部分型検査を行う。複数診断は未実装。
+- Hover・従来の `completions`・定義・参照は**全体の型検査に成功したsnapshot用**。新しい `completionItems` と `signatureHelp` は、Workspaceが同じ文書バージョンから回復した情報も使用する。回復済みAST・部分検査結果は実行禁止で、厳密な診断や `result.checked` に混ぜない。
 - 型の参照、関数、ローカル束縛、aliasの定義・参照に対応する。構造的なフィールドの定義IDは、言語上の意味が未確定なので作らない。フィールドの型Hoverは可能。
-- 名前補完と公開moduleメンバー補完を提供する。キーワード・スニペット・構造体フィールド候補・型専用コンテキストの補完は別途整備する。
-- LSPサーバーのcapability広告、JSON-RPC統合テスト、Extension HostでのLSP確認はサーバー実装時に行う。
+- `completionItems` はlabel / detail / kind / insertText / rangeを返す。キーワード、公開moduleメンバー、スコープ内識別子、構造体・配列のフィールド、未完成の型引数に対応する。署名は具体化した型とactiveParameterを返す。
+- LSPサーバーが補完・引数ヒントのcapabilityを広告し、JSON-RPCテストで挿入範囲・可視性・未完成コード・引数位置を検証する。
 
 テストは未保存entry・依存、完全メモリFS、明示stdlibRoot、CLIのmain検査、UTF-16 / CRLF / 絵文字 / EOF、シャドーイング、公開制御、case / handler、複数ファイル、削除・改名、診断消去、古い解析の破棄、stdlib overlayの拒否、symlink祖先のパス境界を含む。
 
-確認結果: `npm test` 99件、`npm run extension:test` 21件が成功。`npm run format:check` も成功。
+現行機能と制限は [Generics v0.1・条件式・LSP補完](generics-v0.1.md) を参照。検証コマンドは `npm test`、`npm run extension:test`、`npm run format:check`。

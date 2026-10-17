@@ -7,13 +7,14 @@ import type {
 	Module,
 	Node,
 	Parameter,
+	TypeParameter,
 	Statement,
 	TypeNode,
 } from "./ast.js";
 import { lex } from "./lexer.js";
 import type { Token } from "./lexer.js";
 
-const reserved = new Set([
+export const keywords = [
 	"use",
 	"as",
 	"pub",
@@ -40,7 +41,8 @@ const reserved = new Set([
 	"false",
 	"void",
 	"intrinsic",
-]);
+] as const;
+const reserved = new Set<string>(keywords);
 const precedence: Record<string, number> = {
 	"||": 1,
 	"&&": 2,
@@ -65,12 +67,22 @@ export function parse(source: string, file = "<source>"): Module {
 		throw error;
 	}
 }
+/** Tolerant ASTs are used only for editor assistance, never executable compilation. */
+export function parseForEditor(source: string, file = "<source>"): Module {
+	return new Parser(lex(source, file), true).module();
+}
 class Parser {
 	private offset = 0;
+	private readonly splitTokens: { offset: number; token: Token }[] = [];
+	private readonly incompleteBlocks = new WeakSet<Block>();
+	private allowNamedStruct = true;
 	private readonly typeNames: Set<string>;
 	private readonly aliases: Set<string>;
 	private readonly typingAliases = new Set<string>();
-	constructor(private readonly tokens: Token[]) {
+	constructor(
+		private readonly tokens: Token[],
+		private readonly recovering = false,
+	) {
 		for (let index = 0; index < tokens.length; index++) {
 			if (
 				tokens[index]!.kind === "identifier" &&
@@ -108,6 +120,26 @@ class Parser {
 		return true;
 	}
 	private expect(text: string): Token {
+		// A closing type delimiter may touch '=' without changing comparison tokens.
+		if (text === ">" && this.at(">=")) {
+			const token = this.current;
+			this.splitTokens.push({ offset: this.offset, token });
+			this.tokens.splice(
+				this.offset,
+				1,
+				{
+					...token,
+					text: ">",
+					range: { ...token.range, end: token.range.start + 1 },
+				},
+				{
+					...token,
+					text: "=",
+					span: { ...token.span, column: token.span.column + 1 },
+					range: { ...token.range, start: token.range.start + 1 },
+				},
+			);
+		}
 		if (!this.at(text))
 			throw new LanguageError(
 				this.current.span,
@@ -115,6 +147,16 @@ class Parser {
 				this.current.range,
 			);
 		return this.take();
+	}
+	private checkpoint(): { offset: number; splits: number } {
+		return { offset: this.offset, splits: this.splitTokens.length };
+	}
+	private restore(checkpoint: { offset: number; splits: number }): void {
+		this.offset = checkpoint.offset;
+		while (this.splitTokens.length > checkpoint.splits) {
+			const split = this.splitTokens.pop()!;
+			this.tokens.splice(split.offset, 2, split.token);
+		}
 	}
 	private identifier(): Token {
 		if (
@@ -143,8 +185,17 @@ class Parser {
 	module(): Module {
 		const span = this.current.span,
 			declarations: Declaration[] = [];
-		while (this.current.kind !== "eof")
-			declarations.push(this.declaration());
+		while (this.current.kind !== "eof") {
+			const start = this.offset;
+			try {
+				declarations.push(this.declaration());
+			} catch (error) {
+				if (!this.recovering || !(error instanceof LanguageError))
+					throw error;
+				this.offset = start;
+				this.recover(true);
+			}
+		}
 		return {
 			span,
 			declarations,
@@ -181,11 +232,13 @@ class Parser {
 		if (this.accept("type")) {
 			const nameToken = this.identifier(),
 				name = nameToken.text;
+			const typeParams = this.typeParameters();
 			this.expect("=");
 			const type = this.type();
 			this.expect(";");
 			return {
 				kind: "type",
+				typeParams,
 				span,
 				name,
 				type,
@@ -203,6 +256,7 @@ class Parser {
 		this.expect("fn");
 		const nameToken = this.identifier(),
 			name = nameToken.text;
+		const typeParams = this.typeParameters();
 		this.expect("(");
 		const params: Parameter[] = [];
 		if (!this.at(")"))
@@ -235,6 +289,7 @@ class Parser {
 				: this.block();
 		return {
 			kind: "function",
+			typeParams,
 			span,
 			name,
 			params,
@@ -244,6 +299,28 @@ class Parser {
 			public: isPublic,
 			native,
 		};
+	}
+	private typeParameters(): TypeParameter[] {
+		if (!this.accept("<")) return [];
+		const params: TypeParameter[] = [];
+		do {
+			const token = this.identifier();
+			params.push({
+				name: token.text,
+				span: token.span,
+				nameRange: token.range,
+				range: token.range,
+			});
+		} while (this.accept(","));
+		this.expect(">");
+		return params;
+	}
+	private typeArguments(): TypeNode[] {
+		this.expect("<");
+		const args = [this.type()];
+		while (this.accept(",")) args.push(this.type());
+		this.expect(">");
+		return args;
 	}
 	private type(): TypeNode {
 		return this.located(() => this.readType());
@@ -297,6 +374,7 @@ class Parser {
 				span,
 				name,
 				nameRange: nameToken.range,
+				...(this.at("<") ? { typeArgs: this.typeArguments() } : {}),
 				...(qualifier ? { qualifierRange: qualifier.range } : {}),
 			};
 		}
@@ -309,95 +387,149 @@ class Parser {
 		return type;
 	}
 	private block(): Block {
-		return this.located(() => this.readBlock());
+		const block = this.located(() => this.readBlock());
+		if (this.incompleteBlocks.has(block) && block.range)
+			block.range.end = this.current.range.end + 1;
+		return block;
+	}
+	private recover(declaration = false): void {
+		let depth = 0;
+		const start = this.offset;
+		while (this.current.kind !== "eof") {
+			if (depth === 0) {
+				if (!declaration && this.at("}")) return;
+				if (
+					this.offset > start &&
+					(declaration
+						? ["pub", "fn", "type", "use"]
+						: ["let", "return", "while"]
+					).some((word) => this.at(word))
+				)
+					return;
+				if (!declaration && this.accept(";")) return;
+			}
+			if (this.at("{")) depth++;
+			if (this.at("}")) depth = Math.max(0, depth - 1);
+			this.take();
+		}
 	}
 	private readBlock(): Block {
 		const span = this.expect("{").span,
 			statements: Statement[] = [];
 		let tail: Expression | null = null;
-		while (!this.at("}")) {
-			const first = this.current;
-			const start = this.current.span;
-			const append = (statement: Statement): void => {
-				statements.push(this.complete(statement, first));
-			};
-			if (this.accept("let")) {
-				const mutable = this.accept("mut"),
-					nameToken = this.identifier(),
-					name = nameToken.text;
-				this.expect(":");
-				const type = this.type();
-				this.expect("=");
-				const value = this.expression();
-				this.expect(";");
-				append({
-					kind: "let",
-					span: start,
-					mutable,
-					name,
-					type,
-					value,
-					nameRange: nameToken.range,
-				});
-				continue;
+		while (
+			!this.at("}") &&
+			!(this.recovering && this.current.kind === "eof")
+		) {
+			const recoveryStart = this.offset;
+			try {
+				const first = this.current;
+				const start = this.current.span;
+				const append = (statement: Statement): void => {
+					statements.push(this.complete(statement, first));
+				};
+				if (this.accept("let")) {
+					const mutable = this.accept("mut"),
+						nameToken = this.identifier(),
+						name = nameToken.text;
+					this.expect(":");
+					const type = this.type();
+					this.expect("=");
+					const value = this.expression();
+					this.expect(";");
+					append({
+						kind: "let",
+						span: start,
+						mutable,
+						name,
+						type,
+						value,
+						nameRange: nameToken.range,
+					});
+					continue;
+				}
+				if (this.accept("return")) {
+					const value = this.at(";") ? null : this.expression();
+					this.expect(";");
+					append({ kind: "return", span: start, value });
+					continue;
+				}
+				if (this.accept("break")) {
+					this.expect(";");
+					append({ kind: "break", span: start });
+					continue;
+				}
+				if (this.accept("while")) {
+					const condition = this.condition(),
+						body = this.block();
+					append({
+						kind: "while",
+						span: start,
+						condition,
+						body,
+					});
+					continue;
+				}
+				const expression = this.expression();
+				if (this.accept("=")) {
+					const value = this.expression();
+					this.expect(";");
+					append({
+						kind: "assign",
+						span: start,
+						target: expression,
+						value,
+					});
+				} else if (this.accept(";"))
+					append({
+						kind: "expression",
+						span: start,
+						expression,
+					});
+				else if (this.at("}")) {
+					tail = expression;
+					break;
+				} else if (
+					["if", "match", "block", "handle"].includes(expression.kind)
+				)
+					append({
+						kind: "expression",
+						span: start,
+						expression,
+					});
+				else
+					throw new LanguageError(
+						this.current.span,
+						"Expected ';' or block tail",
+					);
+			} catch (error) {
+				if (!this.recovering || !(error instanceof LanguageError))
+					throw error;
+				this.offset = recoveryStart;
+				this.recover();
 			}
-			if (this.accept("return")) {
-				const value = this.at(";") ? null : this.expression();
-				this.expect(";");
-				append({ kind: "return", span: start, value });
-				continue;
-			}
-			if (this.accept("break")) {
-				this.expect(";");
-				append({ kind: "break", span: start });
-				continue;
-			}
-			if (this.accept("while")) {
-				const condition = this.expression(),
-					body = this.block();
-				append({
-					kind: "while",
-					span: start,
-					condition,
-					body,
-				});
-				continue;
-			}
-			const expression = this.expression();
-			if (this.accept("=")) {
-				const value = this.expression();
-				this.expect(";");
-				append({
-					kind: "assign",
-					span: start,
-					target: expression,
-					value,
-				});
-			} else if (this.accept(";"))
-				append({
-					kind: "expression",
-					span: start,
-					expression,
-				});
-			else if (this.at("}")) {
-				tail = expression;
-				break;
-			} else if (
-				["if", "match", "block", "handle"].includes(expression.kind)
-			)
-				append({
-					kind: "expression",
-					span: start,
-					expression,
-				});
-			else
+		}
+		const block: Block = { kind: "block", span, statements, tail };
+		if (this.recovering && this.current.kind === "eof")
+			this.incompleteBlocks.add(block);
+		else this.expect("}");
+		return block;
+	}
+	private condition(): Expression {
+		const previous = this.allowNamedStruct;
+		this.allowNamedStruct = false;
+		try {
+			const condition = this.expression();
+			if (this.at("{") && this.tokens[this.offset + 2]?.text === ":")
 				throw new LanguageError(
 					this.current.span,
-					"Expected ';' or block tail",
+					"Ambiguous struct literal in condition; add parentheses around the condition",
+					this.current.range,
 				);
+			return condition;
+		} finally {
+			this.allowNamedStruct = previous;
 		}
-		this.expect("}");
-		return { kind: "block", span, statements, tail };
 	}
 	private expression(minimum = 0): Expression {
 		const first = this.current;
@@ -426,6 +558,21 @@ class Parser {
 				left = { kind: "update", span, target: left };
 				continue;
 			}
+			let typeArgs: TypeNode[] | undefined;
+			if (
+				this.at("<") &&
+				(left.kind === "identifier" || left.kind === "member")
+			) {
+				const saved = this.checkpoint();
+				try {
+					const candidate = this.typeArguments();
+					if (this.at("(")) typeArgs = candidate;
+					else this.restore(saved);
+				} catch (error) {
+					if (!(error instanceof LanguageError)) throw error;
+					this.restore(saved);
+				}
+			}
 			if (this.accept("(")) {
 				const args: { value: Expression }[] = [];
 				if (!this.at(")"))
@@ -448,7 +595,13 @@ class Parser {
 						});
 					} while (this.accept(",") && !this.at(")"));
 				this.expect(")");
-				left = { kind: "call", span, callee: left, args };
+				left = {
+					kind: "call",
+					span,
+					callee: left,
+					args,
+					...(typeArgs ? { typeArgs } : {}),
+				};
 				continue;
 			}
 			if (minimum === 0 && (this.at("catch") || this.at("otherwise"))) {
@@ -496,7 +649,7 @@ class Parser {
 			return { kind: "unary", span, op, operand: this.expression(7) };
 		}
 		if (this.at("(")) {
-			const saved = this.offset;
+			const saved = this.checkpoint();
 			this.take();
 			let target: TypeNode | undefined;
 			try {
@@ -546,11 +699,17 @@ class Parser {
 					target,
 					value: this.expression(7),
 				};
-			this.offset = saved;
+			this.restore(saved);
 			this.expect("(");
-			const value = this.expression();
-			this.expect(")");
-			return value;
+			const previous = this.allowNamedStruct;
+			this.allowNamedStruct = true;
+			try {
+				const value = this.expression();
+				this.expect(")");
+				return value;
+			} finally {
+				this.allowNamedStruct = previous;
+			}
 		}
 		if (this.at("{")) return this.block();
 		if (this.accept("[")) {
@@ -569,11 +728,31 @@ class Parser {
 				(this.aliases.has(token.text) &&
 					this.tokens[this.offset + 1]?.text === "."))
 		) {
-			const saved = this.offset;
-			const candidate = this.typeAtom();
-			if (this.at("{")) structTarget = candidate;
-			else this.offset = saved;
+			const saved = this.checkpoint();
+			let candidate: TypeNode | undefined;
+			try {
+				candidate = this.typeAtom();
+			} catch (error) {
+				if (!(error instanceof LanguageError)) throw error;
+				this.restore(saved);
+			}
+			if (candidate && this.at("{")) {
+				if (this.allowNamedStruct) structTarget = candidate;
+				else if (this.tokens[this.offset + 2]?.text === ":")
+					throw new LanguageError(
+						span,
+						"Ambiguous struct literal in condition; add parentheses around the condition",
+						token.range,
+					);
+				else this.restore(saved);
+			} else this.restore(saved);
 		}
+		if (!this.allowNamedStruct && this.at("struct"))
+			throw new LanguageError(
+				span,
+				"Struct literals in conditions require parentheses",
+				token.range,
+			);
 		if (structTarget || this.accept("struct")) {
 			this.expect("{");
 			const fields: { name: string; value: Expression }[] = [];
@@ -592,7 +771,7 @@ class Parser {
 			};
 		}
 		if (this.accept("if")) {
-			const condition = this.expression(),
+			const condition = this.condition(),
 				then = this.block();
 			let otherwise: Block | null = null;
 			if (this.accept("else")) otherwise = this.block();

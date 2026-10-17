@@ -1,0 +1,14 @@
+type User = struct { age: int32; };
+type Box<T> = struct { value: T; };
+
+pub fn main() -> int32 {
+	let mut i: int32 = 0;
+	while i < 3 { i++; }
+	while (i < 4) { i++; }
+	if i > 0 && (i == 4 || false) {
+		if (User { age: 4 }.age == i) {
+			if (Box<bool> { value: true }.value) { return snapshot i; }
+		}
+	}
+	return 0;
+}
