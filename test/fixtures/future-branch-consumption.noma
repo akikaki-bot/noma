@@ -1,0 +1,6 @@
+async fn calculate() -> int32 { return 42; }
+pub async fn main() -> int32 {
+    let pending: Future<int32> = calculate();
+    if true { await pending; }
+    return await pending;
+}

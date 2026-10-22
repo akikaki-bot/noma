@@ -1,0 +1,6 @@
+use "std/arr" as arr;
+fn combine(a: int32, b: void) -> void {}
+pub fn main() -> void {
+    let mut values: Array<int32> = [1];
+    combine(read values[0], arr.push<int32>(values, 2));
+}

@@ -1,0 +1,9 @@
+use "std/internal/arr" as storage;
+
+pub fn create<T>() -> Array<T> { return storage.create<T>(); }
+pub fn length<T>(array: Array<T>) -> int32 { return storage.length<T>(array); }
+pub fn get<T>(array: Array<T>, index: int32) -> T | throwable { return storage.get<T>(array, index); }
+pub fn set<T>(mut array: Array<T>, index: int32, value: T) -> void | throwable { return storage.set<T>(array, index, value); }
+pub fn push<T>(mut array: Array<T>, value: T) -> void { storage.push<T>(array, value); }
+pub fn pop<T>(mut array: Array<T>) -> T | throwable { return storage.pop<T>(array); }
+pub fn remove<T>(mut array: Array<T>, index: int32) -> T | throwable { return storage.remove<T>(array, index); }

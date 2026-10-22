@@ -9,7 +9,7 @@ test("real Noma generics fixture: explicit calls, nested/union shapes, mut and i
 	const file = fileURLToPath(
 		new URL("../../test/fixtures/generics.noma", import.meta.url),
 	);
-	assert.equal(await runFile(file, new MemoryIO()), 42);
+	assert.equal(await runFile(file, new MemoryIO()), 42n);
 });
 
 test("documented generics example executes with the existing std/io library", async () => {
@@ -21,7 +21,7 @@ test("documented generics example executes with the existing std/io library", as
 			),
 			io,
 		),
-		0,
+		0n,
 	);
 	assert.equal(io.stdout, "Generics v0.1\n");
 });
@@ -40,7 +40,7 @@ pub fn main() -> int32 { let b: h.Box<int32> = h.Box<int32> { value: f<int32>(7)
 					"pub type Box<T> = struct { value: T; }; pub fn identity<T>(value: T) -> T { return value; }",
 			},
 		),
-		7,
+		7n,
 	);
 });
 
@@ -58,7 +58,7 @@ pub fn main() -> int32 {
  return recurse<int32>(value, 3);
 }`,
 		),
-		9,
+		9n,
 	);
 });
 
@@ -71,7 +71,7 @@ test("comparisons keep their meaning beside generic syntax and nested >> tokens"
 			t,
 			"pub fn main() -> int32 { let a: int32 = 1; let b: int32 = 2; if a < b && b > a { return 3; } return 0; }",
 		),
-		3,
+		3n,
 	);
 });
 
@@ -114,7 +114,7 @@ const rejected: [string, string, RegExp][] = [
 	[
 		"invalid unused definition",
 		"fn double<T>(x:T)->T{return x+x;}",
-		/Expected int32/,
+		/matching concrete numeric types/,
 	],
 	[
 		"distinct type parameters",

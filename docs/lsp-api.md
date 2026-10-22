@@ -103,7 +103,7 @@ Hoverはプレーンテキストの `contents` とRange。定義・参照はURI�
 - 診断は最初の1件。補完専用にParserの回復と部分型検査を行う。複数診断は未実装。
 - Hover・従来の `completions`・定義・参照は**全体の型検査に成功したsnapshot用**。新しい `completionItems` と `signatureHelp` は、Workspaceが同じ文書バージョンから回復した情報も使用する。回復済みAST・部分検査結果は実行禁止で、厳密な診断や `result.checked` に混ぜない。
 - 型の参照、関数、ローカル束縛、aliasの定義・参照に対応する。構造的なフィールドの定義IDは、言語上の意味が未確定なので作らない。フィールドの型Hoverは可能。
-- `completionItems` はlabel / detail / kind / insertText / rangeを返す。キーワード、公開moduleメンバー、スコープ内識別子、構造体・配列のフィールド、未完成の型引数に対応する。署名は具体化した型とactiveParameterを返す。
+- `completionItems` はlabel / detail / kind / insertText / rangeを返す。read / async / await / Future、公開moduleメンバー、スコープ内識別子、構造体のフィールド、未完成の型引数に対応する。配列の `.length` は提供しない。asyncの呼び出しヒントは具体化した `Future<T>` を返す。Futureの消費・借用競合も通常の型診断として通知する。
 - LSPサーバーが補完・引数ヒントのcapabilityを広告し、JSON-RPCテストで挿入範囲・可視性・未完成コード・引数位置を検証する。
 
 テストは未保存entry・依存、完全メモリFS、明示stdlibRoot、CLIのmain検査、UTF-16 / CRLF / 絵文字 / EOF、シャドーイング、公開制御、case / handler、複数ファイル、削除・改名、診断消去、古い解析の破棄、stdlib overlayの拒否、symlink祖先のパス境界を含む。

@@ -15,6 +15,7 @@ import {
 	BOOL,
 	builtins,
 	containsTSAny,
+	containsFuture,
 	describe,
 	equivalent,
 	INT32,
@@ -35,6 +36,17 @@ import type { Type } from "./types.js";
 import { SemanticIndex } from "./semantic.js";
 import type { SemanticSymbol, SymbolKind } from "./semantic.js";
 import type { SourceRange } from "./source.js";
+import { arrayNativeOperation, arraySignature } from "./array-abi.js";
+import type { ArrayNative } from "./array-abi.js";
+import { checkSafety } from "./safety.js";
+import {
+	assertIntegerRange,
+	integerOperation,
+	isIntegerType,
+	isNumericType,
+	numericCast,
+} from "./numeric.js";
+import type { IntegerType, NumericType } from "./numeric.js";
 
 export type FunctionDeclaration = Extract<Declaration, { kind: "function" }>;
 export interface FunctionInfo {
@@ -42,7 +54,7 @@ export interface FunctionInfo {
 	module: SourceModule;
 	params: Type[];
 	result: Type;
-	intrinsic?: "trycast";
+	intrinsic?: "trycast" | ArrayNative;
 	typeBindings?: ReadonlyMap<string, Type>;
 }
 interface Binding {
@@ -115,7 +127,10 @@ export class CheckedProgram {
 	readonly functions = new Map<SourceModule, Map<string, FunctionInfo>>();
 	readonly types = new Map<SourceModule, Map<string, Type>>();
 	readonly expressionTypes = new WeakMap<Expression, Type>();
-	private readonly constantIntegers = new WeakMap<Expression, bigint>();
+	private readonly constantNumbers = new WeakMap<
+		Expression,
+		bigint | number
+	>();
 	readonly matchTypes = new WeakMap<TypeNode, Type>();
 	readonly calls = new WeakMap<Expression, FunctionInfo>();
 	readonly projections = new WeakMap<Expression, Type>();
@@ -149,7 +164,7 @@ export class CheckedProgram {
 			this.functions.set(module, new Map());
 			for (const declaration of module.ast.declarations) {
 				if (declaration.kind !== "use")
-					this.defineTypeParameters(declaration);
+					this.defineTypeParameters(declaration, module);
 				this.semantic.define(
 					declaration,
 					declaration.kind === "use"
@@ -175,7 +190,7 @@ export class CheckedProgram {
 				if (
 					declaration.kind !== "use" &&
 					(builtins.has(declaration.name) ||
-						declaration.name === "Array") &&
+						["Array", "Future"].includes(declaration.name)) &&
 					!(
 						declaration.kind === "type" &&
 						declaration.name === "Type" &&
@@ -215,6 +230,7 @@ export class CheckedProgram {
 						if (
 							!declaration.public ||
 							declaration.native ||
+							declaration.async ||
 							declaration.body ||
 							declaration.params.length !== 2 ||
 							declaration.params.some((param) => param.mutable) ||
@@ -243,7 +259,11 @@ export class CheckedProgram {
 						);
 						continue;
 					}
-					if (!declaration.native && !declaration.body)
+					const arrayAPI = arrayNativeOperation(
+						module,
+						declaration.name,
+					);
+					if (!declaration.native && !declaration.body && !arrayAPI)
 						this.fail(
 							declaration,
 							"Only compiler intrinsic APIs may omit a function body",
@@ -252,6 +272,71 @@ export class CheckedProgram {
 							this.resolveType(module, param.type),
 						),
 						result = this.resolveType(module, declaration.result);
+					if (
+						declaration.params.some(
+							(p, i) => p.mutable && containsFuture(params[i]!),
+						)
+					)
+						this.fail(
+							declaration,
+							"Future and containers holding Future cannot be mutable",
+						);
+					if (
+						declaration.async &&
+						(declaration.native ||
+							declaration.params.some((p) => p.mutable))
+					)
+						this.fail(
+							declaration,
+							"Async functions cannot retain mutable borrows or be native",
+						);
+					if (
+						declaration.native &&
+						(params.some(containsFuture) || containsFuture(result))
+					)
+						this.fail(
+							declaration,
+							"The copying Native Bridge cannot accept or return Future-containing types",
+						);
+					if (arrayAPI) {
+						const formal = [...this.activeTypeParameters.values()];
+						const signature = arraySignature(
+							arrayAPI,
+							formal[0] ?? NEVER,
+						);
+						if (
+							formal.length !== 1 ||
+							declaration.public ||
+							!declaration.native ||
+							declaration.async ||
+							declaration.body ||
+							params.length !== signature.params.length ||
+							!equivalent(result, signature.result) ||
+							params.some(
+								(p, i) =>
+									!equivalent(p, signature.params[i]!) ||
+									declaration.params[i]!.mutable !==
+										signature.mutable[i],
+							)
+						)
+							this.fail(
+								declaration,
+								"Invalid array native signature",
+							);
+						this.functions.get(module)!.set(declaration.name, {
+							declaration,
+							module,
+							params,
+							result,
+							intrinsic: `array.${arrayAPI}`,
+						});
+						this.semantic.update(
+							declaration,
+							undefined,
+							`fn ${declaration.name}<T>(${declaration.params.map((p, i) => `${p.mutable ? "mut " : ""}${p.name}: ${describe(params[i]!)}`).join(", ")}) -> ${describe(result)}`,
+						);
+						continue;
+					}
 					if (
 						containsTSAny(result) ||
 						(params.some((type) => containsTSAny(type)) &&
@@ -299,7 +384,7 @@ export class CheckedProgram {
 					this.semantic.update(
 						declaration,
 						undefined,
-						`fn ${declaration.name}${this.parameterLabel(declaration)}(${declaration.params.map((parameter, index) => `${parameter.mutable ? "mut " : ""}${parameter.name}: ${describe(params[index]!)}`).join(", ")}) -> ${describe(result)}`,
+						`${declaration.async ? "async " : ""}fn ${declaration.name}${this.parameterLabel(declaration)}(${declaration.params.map((parameter, index) => `${parameter.mutable ? "mut " : ""}${parameter.name}: ${describe(params[index]!)}`).join(", ")}) -> ${describe(result)}`,
 					);
 				} catch (error) {
 					this.recoverError(error);
@@ -326,11 +411,12 @@ export class CheckedProgram {
 								mutable: param.mutable,
 								borrowed:
 									param.mutable ||
-									variants(fn.params[index]!).some(
-										(type) =>
-											type.kind === "struct" ||
-											type.kind === "array",
-									),
+									(!containsFuture(fn.params[index]!) &&
+										variants(fn.params[index]!).some(
+											(type) =>
+												type.kind === "struct" ||
+												type.kind === "array",
+										)),
 							},
 							param,
 							"parameter",
@@ -355,6 +441,7 @@ export class CheckedProgram {
 				}
 			}
 		this.activeTypeParameters = new Map();
+		if (!this.recovering) checkSafety(this);
 		if (options.requireEntryPoint ?? true) this.checkEntryPoint();
 		return this;
 	}
@@ -398,6 +485,7 @@ export class CheckedProgram {
 	}
 	private defineTypeParameters(
 		declaration: Exclude<Declaration, { kind: "use" }>,
+		module: SourceModule,
 	): void {
 		const scope = new Map<string, Type>();
 		for (const parameter of declaration.typeParams ?? []) {
@@ -408,7 +496,9 @@ export class CheckedProgram {
 				);
 			if (
 				builtins.has(parameter.name) ||
-				["Array", "TSAny", "intrinsic"].includes(parameter.name)
+				["Array", "Future", "TSAny", "intrinsic"].includes(
+					parameter.name,
+				)
 			)
 				this.fail(
 					parameter,
@@ -433,7 +523,9 @@ export class CheckedProgram {
 		if (
 			scope.size &&
 			((declaration.kind === "type" && declaration.compilerOnly) ||
-				(declaration.kind === "function" && declaration.native))
+				(declaration.kind === "function" &&
+					declaration.native &&
+					!arrayNativeOperation(module, declaration.name)))
 		)
 			this.fail(
 				declaration,
@@ -463,6 +555,19 @@ export class CheckedProgram {
 		);
 		if (concrete.some(containsTSAny))
 			this.fail(node, "TSAny cannot be a generic type argument");
+		if (
+			concrete.some(containsFuture) &&
+			!(
+				fn.intrinsic === "array.length" ||
+				(fn.module.trusted &&
+					["std/arr", "std/internal/arr"].includes(fn.module.id) &&
+					fn.declaration.name === "length")
+			)
+		)
+			this.fail(
+				node,
+				"Future is non-copyable; generic operations on Future-containing types are not supported",
+			);
 		const bindings = new Map(
 			formal.map((parameter, index) => [
 				(parameter as Extract<Type, { kind: "parameter" }>).id,
@@ -598,6 +703,16 @@ export class CheckedProgram {
 				const args = (node.typeArgs ?? []).map((arg) =>
 					this.resolveType(module, arg, parameters),
 				);
+				if (node.name === "Future") {
+					if (args.length !== 1)
+						this.fail(
+							node,
+							"Future requires one explicit type argument",
+						);
+					const type: Type = { kind: "future", result: args[0]! };
+					this.semantic.builtin(node, type);
+					return type;
+				}
 				if (node.name === "Type" || node.name === "intrinsic")
 					this.fail(
 						node,
@@ -712,6 +827,7 @@ export class CheckedProgram {
 				this.recoverError(error);
 			}
 		}
+		this.expressionTypes.set(block, result.type);
 		return info(result.type, result.borrowed, accumulated, result.mutable);
 	}
 	private statement(
@@ -724,6 +840,11 @@ export class CheckedProgram {
 		switch (statement.kind) {
 			case "let": {
 				const expected = this.resolveType(module, statement.type);
+				if (statement.mutable && containsFuture(expected))
+					this.fail(
+						statement,
+						"Future and containers holding Future cannot be mutable",
+					);
 				if (containsTSAny(expected))
 					this.fail(
 						statement,
@@ -869,7 +990,7 @@ export class CheckedProgram {
 			);
 		if (!["identifier", "member", "index"].includes(expression.kind))
 			return this.fail(expression, "Expected assignable storage");
-		// Array length is a read-only property even on a mutable array.
+		// Array storage is opaque; normal struct members remain writable.
 		if (expression.kind === "member") {
 			const object = this.expression(
 				expression.object,
@@ -879,7 +1000,10 @@ export class CheckedProgram {
 				loops,
 			);
 			if (object.type.kind === "array")
-				return this.fail(expression, "Array length is readonly");
+				return this.fail(
+					expression,
+					"Arrays have no properties; use std/arr",
+				);
 			if (object.type.kind === "union")
 				return this.fail(
 					expression,
@@ -947,14 +1071,7 @@ export class CheckedProgram {
 		switch (expression.kind) {
 			case "literal": {
 				const value = expression.value;
-				if (
-					typeof value === "number" &&
-					(!Number.isInteger(value) || value > 2147483647)
-				)
-					this.fail(
-						expression,
-						"Integer literal exceeds int32 range",
-					);
+				const numeric = this.numericContext(expected);
 				result = info(
 					value === null
 						? VOID
@@ -962,7 +1079,16 @@ export class CheckedProgram {
 							? STRING
 							: typeof value === "boolean"
 								? BOOL
-								: INT32,
+								: typeof value === "bigint"
+									? numeric && isIntegerType(numeric.kind)
+										? numeric
+										: INT32
+									: numeric &&
+										  ["float32", "float64"].includes(
+												numeric.kind,
+										  )
+										? numeric
+										: builtins.get("float64")!,
 				);
 				break;
 			}
@@ -990,7 +1116,33 @@ export class CheckedProgram {
 			}
 			case "snapshot": {
 				const value = check(expression.value, expected);
+				if (containsFuture(value.type))
+					this.fail(
+						expression,
+						"Future is non-copyable and cannot be snapshotted",
+					);
 				result = info(value.type, false, value.exits);
+				break;
+			}
+			case "read": {
+				const value = check(expression.value, expected);
+				if (!this.root(expression.value))
+					this.fail(expression, "read requires addressable storage");
+				result = info(value.type, true, value.exits, false);
+				break;
+			}
+			case "await": {
+				if (!fn.declaration.async)
+					this.fail(expression, "await requires an async function");
+				if (expression.value.kind === "read")
+					this.fail(
+						expression,
+						"await requires ownership, not a read borrow",
+					);
+				const value = check(expression.value);
+				if (value.type.kind !== "future")
+					this.fail(expression, "await requires Future<T>");
+				result = info(value.type.result, false, value.exits);
 				break;
 			}
 			case "raise": {
@@ -1025,20 +1177,24 @@ export class CheckedProgram {
 					fn,
 					loops,
 				);
-				this.require(target.type, INT32, expression.target);
-				result = info(
-					target.type.kind === "never" ? NEVER : INT32,
-					false,
-					target.exits,
-				);
+				if (
+					target.type.kind !== "never" &&
+					!isNumericType(target.type.kind)
+				)
+					this.fail(
+						expression.target,
+						"Increment and decrement require a numeric type",
+					);
+				result = info(target.type, false, target.exits);
 				break;
 			}
 			case "cast": {
 				const target = this.resolveType(module, expression.target);
 				const value = check(
 					expression.value,
-					expression.value.kind === "array" &&
-						!expression.value.elements.length
+					expression.value.kind === "array" ||
+						(isIntegerType(target.kind) &&
+							this.contextualNumeric(expression.value))
 						? target
 						: undefined,
 				);
@@ -1047,7 +1203,13 @@ export class CheckedProgram {
 						expression.value,
 						"Casting mutable values requires snapshot",
 					);
-				if (!projectable(value.type, target))
+				if (
+					!(
+						isNumericType(value.type.kind) &&
+						isNumericType(target.kind)
+					) &&
+					!projectable(value.type, target)
+				)
 					this.fail(
 						expression,
 						`Cannot prove safe structural cast from ${describe(value.type)} to ${describe(target)}`,
@@ -1061,12 +1223,18 @@ export class CheckedProgram {
 				break;
 			}
 			case "array": {
+				const alternatives = expected
+					? variants(expected).filter((t) => t.kind === "array")
+					: [];
 				const context =
-					expected?.kind === "array" ? expected.element : undefined;
-				if (!expression.elements.length && !context)
+					alternatives.length === 1 &&
+					alternatives[0]!.kind === "array"
+						? alternatives[0]!.element
+						: undefined;
+				if (!context)
 					this.fail(
 						expression,
-						"Empty arrays require an expected array type",
+						"Array literals require an unambiguous expected array type",
 					);
 				const elements = expression.elements.map((element) =>
 					check(element, context),
@@ -1083,15 +1251,7 @@ export class CheckedProgram {
 						? NEVER
 						: {
 								kind: "array",
-								element:
-									context ??
-									(elements.length
-										? union(
-												elements.map(
-													(element) => element.type,
-												),
-											)
-										: context!),
+								element: context,
 							},
 					elements.some((element) => element.borrowed),
 					exits(...elements),
@@ -1108,7 +1268,12 @@ export class CheckedProgram {
 						expression,
 						"Named struct literals require a struct type",
 					);
-				const context = declared ?? expected;
+				const structures = expected
+					? variants(expected).filter((t) => t.kind === "struct")
+					: [];
+				const context =
+					declared ??
+					(structures.length === 1 ? structures[0] : expected);
 				const fields = new Map<string, Type>(),
 					values: Info[] = [];
 				for (const field of expression.fields) {
@@ -1161,18 +1326,11 @@ export class CheckedProgram {
 					);
 					break;
 				}
-				if (
-					object.type.kind === "array" &&
-					expression.name === "length"
-				) {
-					result = info(
-						INT32,
-						object.borrowed,
-						object.exits,
-						object.mutable,
+				if (object.type.kind === "array")
+					this.fail(
+						expression,
+						"Arrays have no properties; use std/arr",
 					);
-					break;
-				}
 				const fields = variants(object.type).map((type) =>
 					type.kind === "struct"
 						? type.fields.get(expression.name)
@@ -1234,6 +1392,11 @@ export class CheckedProgram {
 						expression.args[0]!.value.type,
 					);
 					const value = check(expression.args[1]!.value);
+					if (containsFuture(value.type) || containsFuture(target))
+						this.fail(
+							expression,
+							"trycast cannot copy Future-containing types",
+						);
 					if (value.mutable)
 						this.fail(
 							expression.args[1]!.value,
@@ -1271,6 +1434,20 @@ export class CheckedProgram {
 						this.fail(
 							arg.value,
 							`Readonly parameter '${parameter.name}' requires snapshot of mutable values`,
+						);
+					if (called.declaration.async && value.borrowed)
+						this.fail(
+							arg.value,
+							"Async arguments require owned values; snapshot borrowed storage",
+						);
+					if (
+						called.declaration.native &&
+						!called.intrinsic?.startsWith("array.") &&
+						containsFuture(value.type)
+					)
+						this.fail(
+							arg.value,
+							"The copying Native Bridge cannot accept Future-containing values",
 						);
 					if (target.kind !== "tsany")
 						this.require(value.type, target, arg.value);
@@ -1319,7 +1496,9 @@ export class CheckedProgram {
 				result = info(
 					values.some((value) => value.type.kind === "never")
 						? NEVER
-						: called.result,
+						: called.declaration.async
+							? { kind: "future", result: called.result }
+							: called.result,
 					false,
 					exits(...values),
 				);
@@ -1329,32 +1508,70 @@ export class CheckedProgram {
 				if (
 					expression.op === "-" &&
 					expression.operand.kind === "literal" &&
-					expression.operand.value === 2147483648
+					typeof expression.operand.value === "bigint"
 				) {
-					result = info(INT32);
+					const context = this.numericContext(expected);
+					const type =
+						context && isIntegerType(context.kind)
+							? context
+							: INT32;
+					// The positive magnitude of a signed minimum is not itself a value
+					// in the target type. Check the complete negative literal instead.
+					this.expressionTypes.set(expression.operand, type);
+					this.constantNumbers.set(
+						expression.operand,
+						expression.operand.value,
+					);
+					result = info(type);
 					break;
 				}
-				const operand = check(expression.operand);
-				this.require(
-					operand.type,
-					expression.op === "!" ? BOOL : INT32,
-					expression,
+				const operand = check(
+					expression.operand,
+					expression.op === "!" ? BOOL : expected,
 				);
+				if (expression.op === "!")
+					this.require(operand.type, BOOL, expression);
+				else if (
+					operand.type.kind !== "never" &&
+					!isNumericType(operand.type.kind)
+				)
+					this.fail(
+						expression,
+						"Unary arithmetic requires a numeric type",
+					);
 				result = info(
 					operand.type.kind === "never"
 						? NEVER
 						: expression.op === "!"
 							? BOOL
-							: INT32,
+							: operand.type,
 					false,
 					operand.exits,
 				);
 				break;
 			}
 			case "binary": {
-				const left = check(expression.left),
-					right = check(expression.right),
-					op = expression.op;
+				const op = expression.op;
+				const context = this.numericContext(expected);
+				// A concrete operand can contextualize literal arithmetic on either
+				// side, but never changes the type of another concrete operand.
+				let left: Info, right: Info;
+				if (
+					this.contextualNumeric(expression.left) &&
+					!this.contextualNumeric(expression.right)
+				) {
+					right = check(expression.right);
+					left = check(
+						expression.left,
+						this.numericContext(right.type) ?? context,
+					);
+				} else {
+					left = check(expression.left, context);
+					right = check(
+						expression.right,
+						this.numericContext(left.type) ?? context,
+					);
+				}
 				let type: Type;
 				if (
 					left.type.kind === "never" ||
@@ -1372,8 +1589,9 @@ export class CheckedProgram {
 					type = BOOL;
 				} else if (["==", "!="].includes(op)) {
 					if (
-						!["string", "int32", "bool", "void"].includes(
-							left.type.kind,
+						!(
+							isNumericType(left.type.kind) ||
+							["string", "bool", "void"].includes(left.type.kind)
 						) ||
 						!equivalent(left.type, right.type)
 					)
@@ -1383,9 +1601,17 @@ export class CheckedProgram {
 						);
 					type = BOOL;
 				} else {
-					this.require(left.type, INT32, expression.left);
-					this.require(right.type, INT32, expression.right);
-					type = ["<", "<=", ">", ">="].includes(op) ? BOOL : INT32;
+					if (
+						!isNumericType(left.type.kind) ||
+						!equivalent(left.type, right.type)
+					)
+						this.fail(
+							expression,
+							"Numeric operators require matching concrete numeric types",
+						);
+					type = ["<", "<=", ">", ">="].includes(op)
+						? BOOL
+						: left.type;
 				}
 				result = info(type, false, exits(left, right));
 				break;
@@ -1583,57 +1809,125 @@ export class CheckedProgram {
 				break;
 			}
 		}
-		if (result.type.kind === "int32") this.checkConstantInteger(expression);
+		if (isNumericType(result.type.kind))
+			this.checkConstantNumber(expression, result.type.kind);
 		this.expressionTypes.set(expression, result.type);
 		return result;
 	}
-	/** Literal integer arithmetic is checked exactly; no runtime expressions are evaluated. */
-	private checkConstantInteger(expression: Expression): void {
-		let value: bigint | undefined;
-		if (
-			expression.kind === "literal" &&
-			typeof expression.value === "number"
-		)
-			value = BigInt(expression.value);
-		else if (expression.kind === "snapshot")
-			value = this.constantIntegers.get(expression.value);
-		else if (expression.kind === "unary" && expression.op === "-") {
-			const operand =
-				expression.operand.kind === "literal" &&
-				expression.operand.value === 2147483648
-					? 2147483648n
-					: this.constantIntegers.get(expression.operand);
-			if (operand !== undefined) value = -operand;
-		} else if (expression.kind === "binary") {
-			const left = this.constantIntegers.get(expression.left);
-			const right = this.constantIntegers.get(expression.right);
-			if (left !== undefined && right !== undefined) {
-				switch (expression.op) {
-					case "+":
-						value = left + right;
-						break;
-					case "-":
-						value = left - right;
-						break;
-					case "*":
-						value = left * right;
-						break;
-					case "/":
-						if (right !== 0n) value = left / right;
-						break;
-					case "%":
-						if (right !== 0n) value = left % right;
-						break;
+	/** A unique expected numeric alternative contextualizes literals, never variables. */
+	private numericContext(expected?: Type): Type | undefined {
+		const candidates = expected
+			? variants(expected).filter((type) => isNumericType(type.kind))
+			: [];
+		return candidates.length === 1 ? candidates[0] : undefined;
+	}
+	private contextualNumeric(expression: Expression): boolean {
+		switch (expression.kind) {
+			case "literal":
+				return (
+					typeof expression.value === "bigint" ||
+					typeof expression.value === "number"
+				);
+			case "unary":
+				return (
+					expression.op === "-" &&
+					this.contextualNumeric(expression.operand)
+				);
+			case "snapshot":
+				return this.contextualNumeric(expression.value);
+			case "binary":
+				return (
+					["+", "-", "*", "/", "%"].includes(expression.op) &&
+					this.contextualNumeric(expression.left) &&
+					this.contextualNumeric(expression.right)
+				);
+			default:
+				return false;
+		}
+	}
+	/** Only literal expressions are evaluated; mutable storage and calls stay dynamic. */
+	private checkConstantNumber(
+		expression: Expression,
+		type: NumericType,
+	): void {
+		let value: bigint | number | undefined;
+		try {
+			if (
+				expression.kind === "literal" &&
+				(typeof expression.value === "bigint" ||
+					typeof expression.value === "number")
+			)
+				value = expression.value;
+			else if (expression.kind === "snapshot")
+				value = this.constantNumbers.get(expression.value);
+			else if (expression.kind === "unary" && expression.op === "-") {
+				const operand = this.constantNumbers.get(expression.operand);
+				if (operand !== undefined)
+					value =
+						typeof operand === "bigint"
+							? integerOperation(
+									"negate",
+									operand,
+									0n,
+									type as IntegerType,
+								)
+							: -operand;
+			} else if (expression.kind === "cast") {
+				const operand = this.constantNumbers.get(expression.value);
+				const source = this.expressionTypes.get(expression.value);
+				if (
+					operand !== undefined &&
+					source &&
+					isNumericType(source.kind)
+				)
+					value = numericCast(operand, source.kind, type);
+			} else if (expression.kind === "binary") {
+				const left = this.constantNumbers.get(expression.left);
+				const right = this.constantNumbers.get(expression.right);
+				if (left !== undefined && right !== undefined) {
+					if (typeof left === "bigint" && typeof right === "bigint")
+						value = integerOperation(
+							expression.op,
+							left,
+							right,
+							type as IntegerType,
+						);
+					else if (
+						typeof left === "number" &&
+						typeof right === "number"
+					) {
+						switch (expression.op) {
+							case "+":
+								value = left + right;
+								break;
+							case "-":
+								value = left - right;
+								break;
+							case "*":
+								value = left * right;
+								break;
+							case "/":
+								value = left / right;
+								break;
+							case "%":
+								value = left % right;
+								break;
+						}
+					}
 				}
 			}
-		}
-		if (value === undefined) return;
-		if (value < -2147483648n || value > 2147483647n)
+			if (value === undefined) return;
+			if (typeof value === "bigint" && isIntegerType(type))
+				assertIntegerRange(value, type);
+			else if (typeof value === "number" && type === "float32")
+				value = Math.fround(value);
+		} catch (error) {
 			this.fail(
 				expression,
-				"int32 arithmetic overflow in constant expression",
+				`${error instanceof Error ? error.message : String(error)} in constant expression`,
 			);
-		this.constantIntegers.set(expression, value);
+		}
+		this.constantNumbers.set(expression, value);
 	}
 	private referencesRoots(
 		expression: Expression,

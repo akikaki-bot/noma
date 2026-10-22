@@ -1,0 +1,34 @@
+use "std/io" as io;
+use "std/number" as number;
+use "std/arr" as arr;
+
+fn identity<T>(value: T) -> T { return value; }
+
+pub fn main() -> int32 {
+	let small: int8 = -128;
+	let medium: int16 = -32768;
+	let old: int32 = -2147483648;
+	let signed: int64 = -9223372036854775808;
+	let byte: uint8 = 255;
+	let word: uint16 = 65535;
+	let dword: uint32 = 4294967295;
+	let largest: uint64 = identity<uint64>(18446744073709551615);
+	io.puts(number.toString(small)) catch e { return 1; };
+	io.puts(number.toString(medium)) catch e { return 1; };
+	io.puts(number.toString(old)) catch e { return 1; };
+	io.puts(number.toString(signed)) catch e { return 1; };
+	io.puts(number.toString(byte)) catch e { return 1; };
+	io.puts(number.toString(word)) catch e { return 1; };
+	io.puts(number.toString(dword)) catch e { return 1; };
+	io.puts(number.toString(largest)) catch e { return 1; };
+	let mut values: Array<uint64> = arr.create<uint64>();
+	arr.push<uint64>(values, 9007199254740993);
+	arr.push<uint64>(values, largest);
+	let saved: Array<uint64> = snapshot values;
+	arr.set<uint64>(values, 0, 9007199254740992) catch e { return 2; };
+	let readBack: uint64 = arr.get<uint64>(read values, 0) catch e { return 3; };
+	let removed: uint64 = arr.remove<uint64>(values, 1) catch e { return 4; };
+	if saved[0] != 9007199254740993 || readBack != 9007199254740992 || removed != largest { return 5; }
+	if arr.length<uint64>(read values) != 1 { return 6; }
+	return 0;
+}

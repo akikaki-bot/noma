@@ -78,6 +78,15 @@ function hasScope(source, text, scope, occurrence = 0) {
 	assert.fail(`Missing text: ${text}`);
 }
 
+test("read, async, await and Future receive their language scopes", () => {
+	const source =
+		"pub async fn main()->int32 {let f:Future<int32>=calculate(); inspect(read values[0]); return await f;}";
+	hasScope(source, "async", "storage.modifier");
+	hasScope(source, "await", "keyword.control");
+	hasScope(source, "read", "keyword.operator");
+	hasScope(source, "Future", "support.type.builtin");
+});
+
 test("manifest wires .noma to existing grammar, editing configuration and snippets", async () => {
 	assert.deepEqual(manifest.contributes.languages[0].extensions, [".noma"]);
 	assert.equal(manifest.contributes.languages[0].id, "noma");
@@ -310,8 +319,10 @@ for (const [name, snippet] of Object.entries(snippets)) {
 		const body = expand(snippet);
 		assert.ok(!body.includes("$"), name);
 		let source;
-		if (snippet.prefix === "main") source = body;
-		else if (["fn", "pubfn", "type", "use"].includes(snippet.prefix))
+		if (["main", "asyncmain"].includes(snippet.prefix)) source = body;
+		else if (
+			["fn", "pubfn", "asyncfn", "type", "use"].includes(snippet.prefix)
+		)
 			source = `${body}\nfn main() -> int32 { return 0; }`;
 		else if (snippet.prefix === "snapshot")
 			source = `fn main() -> int32 { let mut value: int32 = 1; ${body} return saved; }`;
@@ -321,6 +332,14 @@ for (const [name, snippet] of Object.entries(snippets)) {
 			source = `fn fallible() -> int32 | throwable { return 1; } fn main() -> int32 { let value: int32 = fallible() ${body}; return value; }`;
 		else if (snippet.prefix === "raise")
 			source = `fn f() -> int32 | throwable { ${body} } fn main() -> void {}`;
+		else if (snippet.prefix === "read")
+			source = `fn inspect(value:int32)->void{} fn main()->void{let mut value:int32=1;inspect(${body});}`;
+		else if (snippet.prefix === "arrlen")
+			source = `use "std/arr" as arr; fn main()->int32{let mut values:Array<int32>=[1];return ${body};}`;
+		else if (snippet.prefix === "future")
+			source = `async fn calculate()->int32{return 42;} fn main()->void{${body}}`;
+		else if (snippet.prefix === "await")
+			source = `async fn calculate()->int32{return 42;} async fn main()->int32{let pending:Future<int32>=calculate();${body} return result;}`;
 		else source = `fn main() -> int32 { ${body}\nreturn 0; }`;
 		parse(source);
 		const directory = await mkdtemp(path.join(tmpdir(), "noma-snippet-"));

@@ -1,0 +1,42 @@
+use "std/arr" as arr;
+type Item = struct { values: Array<int32>; };
+fn single<T>(value: T) -> Array<T> { return [value]; }
+fn empty<T>() -> Array<T> { return []; }
+
+pub fn main() -> int32 {
+    let mut numbers: Array<int32> = arr.create<int32>();
+    let emptyStrings: Array<string> = empty<string>();
+    let words: Array<string> = ["A", "B"];
+    if arr.length<string>(emptyStrings) != 0 || arr.length<string>(words) != 2 { return 1; }
+    arr.push<int32>(numbers, 10);
+    arr.push<int32>(numbers, 20);
+    arr.push<int32>(numbers, 30);
+    arr.set<int32>(numbers, 1, 21) catch e { return 2; };
+    let saved: Array<int32> = snapshot numbers;
+    arr.set<int32>(numbers, 8, 99) otherwise e { void };
+    arr.set<int32>(numbers, -1, 99) otherwise e { void };
+    let invalid: int32 = arr.get<int32>(read numbers, -1) otherwise e { -1 };
+    let last: int32 = arr.pop<int32>(numbers) otherwise e { -1 };
+    let first: int32 = arr.remove<int32>(numbers, 0) otherwise e { -1 };
+    let rejected: int32 = arr.remove<int32>(numbers, 9) otherwise e { -1 };
+    if last != 30 || first != 10 || rejected != -1 || invalid != -1 { return 3; }
+    if arr.length<int32>(read numbers) != 1 || numbers[0] != 21 || saved[2] != 30 { return 4; }
+    arr.pop<int32>(numbers) catch e { return 5; };
+    let noValue: int32 = arr.pop<int32>(numbers) otherwise e { -1 };
+    if noValue != -1 || arr.length<int32>(read numbers) != 0 { return 6; }
+
+    let mut items: Array<Item> = [Item { values: [7, 8] }];
+    let independent: Item = arr.get<Item>(read items, 0) catch e { return 7; };
+    items[0].values[0] = 9;
+    if independent.values[0] != 7 { return 8; }
+    let removed: Item = arr.remove<Item>(items, 0) catch e { return 9; };
+    if removed.values[0] != 9 || arr.length<Item>(read items) != 0 { return 10; }
+
+    let mut nested: Array<Array<int32>> = [single<int32>(42)];
+    let independentArray: Array<int32> = arr.get<Array<int32>>(read nested, 0) catch e { return 11; };
+    nested[0][0] = 43;
+    if independentArray[0] != 42 { return 12; }
+    let taken: Array<int32> = arr.pop<Array<int32>>(nested) catch e { return 13; };
+    if taken[0] != 43 || arr.length<Array<int32>>(read nested) != 0 { return 14; }
+    return 0;
+}

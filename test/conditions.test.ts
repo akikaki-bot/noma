@@ -13,7 +13,7 @@ test("real Noma conditions fixture: grouped/ungrouped, comparisons, logic, neste
 			),
 			new MemoryIO(),
 		),
-		4,
+		4n,
 	);
 });
 test("parenthesized struct equality remains syntactically valid without extending equality semantics", () => {
@@ -27,7 +27,7 @@ test("a local boolean shadowing a type name is a condition, not a struct constru
 			t,
 			"type Flag = bool; pub fn main()->int32 { let Flag: bool = true; if Flag { return 1; } return 0; }",
 		),
-		1,
+		1n,
 	);
 });
 for (const keyword of ["if", "while"]) {

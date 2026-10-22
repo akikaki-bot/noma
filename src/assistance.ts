@@ -67,11 +67,9 @@ function fields(type: Type): Map<string, Type> {
 	const members = alternatives.map((t) =>
 		t.kind === "struct"
 			? new Map(t.fields)
-			: t.kind === "array"
-				? new Map([["length", builtins.get("int32")!]])
-				: t.kind === "throwable"
-					? new Map([["message", builtins.get("string")!]])
-					: new Map<string, Type>(),
+			: t.kind === "throwable"
+				? new Map([["message", builtins.get("string")!]])
+				: new Map<string, Type>(),
 	);
 	const result = new Map<string, Type>();
 	for (const name of members[0]?.keys() ?? []) {
@@ -101,7 +99,7 @@ function genericContext(
 		if (token.text === "<") {
 			if (depth === 0) {
 				const name = tokens[i - 1]?.text;
-				if (name === "Array") return true;
+				if (name === "Array" || name === "Future") return true;
 				if (!checked || !name) return false;
 				const alias =
 					tokens[i - 2]?.text === "."
@@ -214,6 +212,7 @@ export function completionItems(
 	for (const [name, type] of builtins)
 		if (name !== "Type") add(name, describe(type), "type");
 	add("Array", "Array<T>", "type");
+	add("Future", "Future<T>", "type");
 	if (!typesOnly)
 		for (const keyword of keywords)
 			if (keyword !== "throw") add(keyword, keyword, "keyword");
@@ -376,7 +375,7 @@ export function signatureHelp(
 		return {
 			signatures: [
 				{
-					label: `${alias ? alias + "." : ""}${name.text}${typeLabel}(${parameters.map((p) => p.label).join(", ")}) -> ${describe(instance.result)}`,
+					label: `${alias ? alias + "." : ""}${name.text}${typeLabel}(${parameters.map((p) => p.label).join(", ")}) -> ${describe(instance.declaration.async ? { kind: "future", result: instance.result } : instance.result)}`,
 					parameters,
 				},
 			],

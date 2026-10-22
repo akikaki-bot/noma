@@ -59,6 +59,7 @@ export type Declaration = Node &
 				body: Block | null;
 				public: boolean;
 				native: boolean;
+				async?: boolean;
 		  }
 	);
 export interface Module extends Node {
@@ -94,7 +95,11 @@ export interface MatchArm extends Node {
 }
 export type Expression = Node &
 	(
-		| { kind: "literal"; value: string | number | boolean | null }
+		| {
+				kind: "literal";
+				value: string | bigint | number | boolean | null;
+				raw?: string;
+		  }
 		| { kind: "identifier"; name: string }
 		| { kind: "member"; object: Expression; name: string }
 		| { kind: "index"; object: Expression; index: Expression }
@@ -107,10 +112,12 @@ export type Expression = Node &
 		| { kind: "binary"; op: string; left: Expression; right: Expression }
 		| { kind: "unary"; op: string; operand: Expression }
 		| { kind: "snapshot"; value: Expression }
+		| { kind: "read"; value: Expression }
+		| { kind: "await"; value: Expression }
 		| { kind: "raise"; value: Expression }
 		| { kind: "cast"; target: TypeNode; value: Expression }
 		| { kind: "type-argument"; type: TypeNode }
-		| { kind: "update"; target: Expression }
+		| { kind: "update"; target: Expression; op?: "++" | "--" }
 		| { kind: "array"; elements: Expression[] }
 		| {
 				kind: "struct";

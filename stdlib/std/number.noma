@@ -1,6 +1,11 @@
 use "std/internal/number" as arithmetic;
 use "std/internal/string" as unicode;
 
+// Decimal formatting preserves every fixed-width integer bit, including uint64.
+pub fn toString(value: int8 | int16 | int32 | int64 | uint8 | uint16 | uint32 | uint64 | float32 | float64) -> string {
+	return arithmetic.toString(value);
+}
+
 pub fn absInt32(value: int32) -> int32 | throwable {
 	if value == -2147483648 { raise "absInt32: overflow"; }
 	if value < 0 { return -value; }

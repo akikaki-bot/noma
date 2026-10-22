@@ -6,16 +6,16 @@ Noma の `.noma` ファイル向けのエディタサポートです。VS Code 1
 
 - `.noma` の言語認識（言語ID: `noma`）。
 - TextMate Grammar によるキーワード、型注釈・型宣言、関数宣言・呼び出し、変数、文字列、整数、真偽値、コメントのハイライト。
-- `fn`、`pub`、`mut`、`snapshot`、`match`、`catch`、`otherwise`、`native`、`compilerOnly`、`intrinsic` など、現在のParserで使用するキーワード。
+- `fn`、`pub`、`mut`、`read`、`snapshot`、`async`、`await`、`match`、`catch`、`otherwise`、`native`、`compilerOnly`、`intrinsic` など、現在のParserで使用するキーワード。組込み型 `Future<T>` の着色・補完にも対応する。
 - ネストした `/* ... */` コメント、`//` コメント、JSON形式の文字列エスケープ。
 - `{}`、`[]`、`()`、二重引用符の自動補完と選択範囲の囲み、括弧に応じたインデント、コメント切り替え。
-- 明示的な型注釈を含む13種類のコードスニペット。
+- 明示的な型注釈を含む21種類のコードスニペット。
 
 色は利用するテーマに依存します。型名は宣言や型注釈の文脈で識別します。TextMateのみでは名前解決を行いません。
 
-## LSPで利用できる機能（0.2.0）
+## LSPで利用できる機能（0.3.0）
 
-- 未保存文書の構文・静的型・`mut` / `snapshot` の診断。
+- 未保存文書の構文・静的型、readの借用競合・脱出、Futureの消費・Snapshot・可変化、期待型のない配列の診断。
 - キーワード、関数・変数・引数・型・モジュール名、公開moduleメンバー、構造体フィールドの補完。ジェネリックフィールドは具体化した型を表示。
 - 関数の引数ヒント。型引数を明示したジェネリック呼び出しは具体化した署名を表示。
 - Hoverによる型・関数署名の表示。
@@ -31,10 +31,10 @@ Noma の `.noma` ファイル向けのエディタサポートです。VS Code 1
 
 ## インストール
 
-VS Code のコマンドパレットで **Extensions: Install from VSIX...** を実行し、生成した `noma-language-0.2.0.vsix` を選びます。CLIでもインストールできます（リポジトリルートから実行）。
+VS Code のコマンドパレットで **Extensions: Install from VSIX...** を実行し、生成した `noma-language-0.3.0.vsix` を選びます。CLIでもインストールできます（リポジトリルートから実行）。
 
 ```sh
-code --install-extension extensions/vscode-noma/dist/noma-language-0.2.0.vsix
+code --install-extension extensions/vscode-noma/dist/noma-language-0.3.0.vsix
 ```
 
 `.noma` を開き、右下の言語表示が Noma になることを確認してください。
@@ -50,7 +50,7 @@ npm run extension:test
 npm run extension:package
 ```
 
-`extension:package` はテストを実行してから、`extensions/vscode-noma/dist/noma-language-0.2.0.vsix` を生成します。バージョン変更時はファイル名も自動で変わります。VSIXにはクライアント・サーバーのバンドル、解析に必要なstdlib、依存ライセンス表記を含めます。`node_modules`、開発用テスト、Interpreter・Native Registryは同梱しません。利用者によるnpm installやNoma処理系の別途インストールは不要です。
+`extension:package` はテストを実行してから、`extensions/vscode-noma/dist/noma-language-0.3.0.vsix` を生成します。バージョン変更時はファイル名も自動で変わります。VSIXにはクライアント・サーバーのバンドル、解析に必要なstdlib、依存ライセンス表記を含めます。`node_modules`、開発用テスト、Interpreter・Native Registryは同梱しません。利用者によるnpm installやNoma処理系の別途インストールは不要です。
 
 通信テストは `extension:test` に含まれます。実際のVS Codeでの検証は `npm run extension:test:host` で実行します。通常のユーザープロファイルから独立したデータと拡張ディレクトリを使用します。Windowsでは既存のVS Codeを検出し、他環境ではテスト用VS Codeを取得します。`VSCODE_EXECUTABLE_PATH` で実行ファイルを指定でき、`NOMA_TEST_DOWNLOAD_VSCODE=1` で既存インストールの検出を省略し、`VSCODE_TEST_VERSION` でテストするバージョンを指定できます。
 
@@ -64,7 +64,12 @@ npm run extension:package
 
 | Prefix | 内容 |
 | --- | --- |
-| `main` | `int32` を返すエントリ関数 |
+| `main`, `asyncmain` | 同期／非同期のエントリ関数 |
+| `asyncfn` | 宣言上の戻り値Tを指定し、呼び出し時にFuture<T>を作る関数 |
+| `read` | 同期Readonly呼び出し引数への一時借用（変数保存には使用不可） |
+| `array` | 明示型付きの配列リテラル |
+| `arrlen` | コピーなしのarr.length<T>(read values) |
+| `future`, `await` | Lazy Futureの保存／async内での一度だけの消費 |
 | `fn`, `pubfn` | 型注釈付きの関数・公開関数 |
 | `let`, `letmut` | 不変・可変束縛 |
 | `snapshot` | 独立した不変値の保存 |
@@ -73,7 +78,10 @@ npm run extension:package
 | `if`, `while` | 条件分岐・ループ |
 | `match` | 型付きcaseによる式 |
 | `catch` | 脱出する後置エラーハンドラ |
+| `raise` | throwableを含む関数からエラーを送出 |
 | `otherwise` | 代替値を返す後置エラーハンドラ |
+
+`arrlen` は `use "std/arr" as arr;` が必要です。`read` は同期関数のReadonly引数に直接挿入し、`await` はasync関数内で使用してください。
 
 `catch` / `otherwise` は `T | throwable` を返す式の直後に挿入します。`catch` の `return` 値は関数の戻り値型に合わせ、`otherwise` の末尾式は成功側の型に合わせてください。`match` のcaseは対象Unionを網羅するよう調整してください。
 
@@ -85,4 +93,4 @@ npm run extension:package
 
 ### 言語v0.0.2
 
-raise/catch/otherwise、構造的cast、typing.trycastの型指定引数をハイライトします。mutは関数宣言側のみで指定し、通常引数への可変値はsnapshotが必要です。raiseとcatchのスニペットを提供します。診断・Hover・型参照は共有するv0.0.2のParser/Checkerから得ます。
+raise/catch/otherwise、構造的cast、typing.trycastの型指定引数をハイライトします。mutは関数宣言側のみで指定し、通常引数への可変値はreadまたはsnapshotが必要です。Futureの二重消費と借用競合を診断し、asyncの呼び出しヒントにFutureの型を表示します。配列の `.length` は補完せず、`std/arr`の `length<T>()` を使います。raiseとcatchのスニペットを提供します。診断・Hover・型参照は共有するParser/Checkerから得ます。

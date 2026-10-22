@@ -13,6 +13,46 @@
 		],
 		"description": "Function with explicit parameter and return types"
 	},
+	"Async main function": {
+		"prefix": "asyncmain",
+		"body": ["pub async fn main() -> int32 {", "\t$0", "\treturn 0;", "}"],
+		"description": "Async entry point driven by the Noma executor"
+	},
+	"Async function": {
+		"prefix": "asyncfn",
+		"body": [
+			"async fn ${1:calculate}(${2:value}: ${3:int32}) -> ${4:int32} {",
+			"\t$0",
+			"\treturn ${5:0};",
+			"}"
+		],
+		"description": "Lazy async function; a call returns Future of the declared result type"
+	},
+	"Read argument": {
+		"prefix": "read",
+		"body": "read ${1:value}$0",
+		"description": "Temporary readonly borrow; insert directly into a synchronous call argument"
+	},
+	"Array binding": {
+		"prefix": "array",
+		"body": "let mut ${1:values}: Array<${2:int32}> = [${3:1, 2, 3}];$0",
+		"description": "Array literal with its required explicit expected type"
+	},
+	"Array length": {
+		"prefix": "arrlen",
+		"body": "arr.length<${1:int32}>(read ${2:values})$0",
+		"description": "Read an array length without copying; requires std/arr imported as arr"
+	},
+	"Future binding": {
+		"prefix": "future",
+		"body": "let ${1:pending}: Future<${2:int32}> = ${3:calculate}();$0",
+		"description": "Store a lazy Future in a readonly binding"
+	},
+	"Await result": {
+		"prefix": "await",
+		"body": "let ${1:result}: ${2:int32} = await ${3:pending};$0",
+		"description": "Consume a Future once inside an async function"
+	},
 	"Public function": {
 		"prefix": "pubfn",
 		"body": [

@@ -1,0 +1,17 @@
+use "std/arr" as arr;
+type Box = struct { values: Array<int32>; length: int32; };
+fn inspect<T>(a: T, b: T) -> void {}
+fn size(values: Array<int32>) -> int32 { return arr.length<int32>(values); }
+fn increase(mut number: int32) -> void { number = number + 1; }
+
+pub fn main() -> int32 {
+    let mut box: Box = Box { values: [10, 20, 30], length: 5 };
+    inspect<Array<int32>>(read box.values, read box.values);
+    inspect<int32>(read box.values[0], size(read box.values));
+    let saved: Box = snapshot box;
+    increase(box.values[0]);
+    box.length = 6;
+    if size(read box.values) != 3 || box.values[0] != 11 { return 1; }
+    if saved.values[0] != 10 || saved.length != 5 || box.length != 6 { return 2; }
+    return 0;
+}

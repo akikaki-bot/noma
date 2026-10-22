@@ -26,7 +26,7 @@ test("echo integrates readLine, match, EOF, handlers and repeated input", async 
 		"utf8",
 	);
 	const host = new MemoryIO(["こんにちは🌱", "", "last"]);
-	assert.equal(await run(t, source, host), 0);
+	assert.equal(await run(t, source, host), 0n);
 	assert.equal(host.stdout, "こんにちは🌱\n\nlast\n");
 });
 test("otherwise replaces an I/O failure and catch exits only on failure", async (t) => {
@@ -43,7 +43,7 @@ test("otherwise replaces an I/O failure and catch exits only on failure", async 
 	}`,
 			host,
 		),
-		0,
+		0n,
 	);
 	assert.equal(
 		await run(
@@ -54,7 +54,7 @@ test("otherwise replaces an I/O failure and catch exits only on failure", async 
 	}`,
 			host,
 		),
-		7,
+		7n,
 	);
 	assert.equal(host.stderr, "input failed\n");
 });
@@ -71,7 +71,7 @@ test("output failure becomes throwable, not success or an uncaught host exceptio
 	}`,
 			host,
 		),
-		8,
+		8n,
 	);
 });
 test("handler static control flow and replacement types are enforced", async (t) => {
@@ -112,7 +112,7 @@ test("break in an error handler exits the enclosing loop normally", async (t) =>
 			'use "std/io" as io; fn main() -> int32 { while true { io.puts("x") catch error { break; }; } return 12; }',
 			host,
 		),
-		12,
+		12n,
 	);
 });
 test("otherwise can have a return-only branch", async (t) => {
@@ -126,7 +126,7 @@ test("otherwise can have a return-only branch", async (t) => {
 			'use "std/io" as io; fn main() -> int32 { let x: string | io.EOF = io.readLine() otherwise error { return 13; }; return 0; }',
 			host,
 		),
-		13,
+		13n,
 	);
 });
 test("native result validation prevents a malformed host result escaping", async (t) => {
@@ -234,7 +234,7 @@ test("Node host input OS failures become throwable through the native registry",
 				'use "std/io" as io; fn main() -> int32 { io.readLine() catch e { if e.message == "stdin broken" { return 4; } return 5; }; return 0; }',
 				host,
 			),
-			4,
+			4n,
 		);
 	} finally {
 		await host.dispose();

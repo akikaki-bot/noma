@@ -1,0 +1,16 @@
+// Private host operations. Only these registered signatures may borrow storage.
+native fn createArray<T>() -> Array<T>;
+native fn lengthArray<T>(array: Array<T>) -> int32;
+native fn getArray<T>(array: Array<T>, index: int32) -> T | throwable;
+native fn setArray<T>(mut array: Array<T>, index: int32, value: T) -> void | throwable;
+native fn pushArray<T>(mut array: Array<T>, value: T) -> void;
+native fn popArray<T>(mut array: Array<T>) -> T | throwable;
+native fn removeArray<T>(mut array: Array<T>, index: int32) -> T | throwable;
+
+pub fn create<T>() -> Array<T> { return createArray<T>(); }
+pub fn length<T>(array: Array<T>) -> int32 { return lengthArray<T>(array); }
+pub fn get<T>(array: Array<T>, index: int32) -> T | throwable { return getArray<T>(array, index); }
+pub fn set<T>(mut array: Array<T>, index: int32, value: T) -> void | throwable { return setArray<T>(array, index, value); }
+pub fn push<T>(mut array: Array<T>, value: T) -> void { pushArray<T>(array, value); }
+pub fn pop<T>(mut array: Array<T>) -> T | throwable { return popArray<T>(array); }
+pub fn remove<T>(mut array: Array<T>, index: int32) -> T | throwable { return removeArray<T>(array, index); }

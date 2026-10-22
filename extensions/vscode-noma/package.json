@@ -2,7 +2,7 @@
 	"name": "noma-language",
 	"displayName": "Noma Language",
 	"description": "Noma language support with diagnostics, completion, hover, definitions and references.",
-	"version": "0.2.0",
+	"version": "0.3.0",
 	"publisher": "noma-local",
 	"private": true,
 	"license": "UNLICENSED",

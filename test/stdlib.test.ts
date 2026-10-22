@@ -20,29 +20,40 @@ import { ThrowableValue } from "../src/values.js";
 import { check, MemoryIO, run } from "./helpers.js";
 
 test("Unicode native operations use scalar values, including supplementary planes", () => {
-	assert.equal(codepointLength("A😀B"), 3);
-	assert.equal(codepointLength(""), 0);
-	assert.equal(codepointLength("e\u0301"), 2);
-	assert.equal(codepointAt("A😀B", 1), 0x1f600);
-	for (const value of [0, 0xd7ff, 0xe000, 0xffff, 0x10000, 0x10ffff]) {
+	assert.equal(codepointLength("A😀B"), 3n);
+	assert.equal(codepointLength(""), 0n);
+	assert.equal(codepointLength("e\u0301"), 2n);
+	assert.equal(codepointAt("A😀B", 1n), 0x1f600n);
+	for (const value of [0n, 0xd7ffn, 0xe000n, 0xffffn, 0x10000n, 0x10ffffn]) {
 		const text = fromCodepoint(value);
 		assert.equal(typeof text, "string");
-		assert.equal(codepointLength(text as string), 1);
-		assert.equal(codepointAt(text as string, 0), value);
+		assert.equal(codepointLength(text as string), 1n);
+		assert.equal(codepointAt(text as string, 0n), value);
 	}
-	for (const index of [-1, 3, 2147483647, 0.5])
-		assert.ok(codepointAt("A😀B", index) instanceof ThrowableValue);
-	assert.ok(codepointAt("", 0) instanceof ThrowableValue);
+	for (const index of [-1n, 3n, 2147483647n, 9007199254740993n, 0.5])
+		assert.ok(
+			codepointAt("A😀B", index as bigint) instanceof ThrowableValue,
+		);
+	assert.ok(codepointAt("", 0n) instanceof ThrowableValue);
 });
 
 test("Unicode native operations reject lone surrogates and non-scalar codepoints", () => {
 	for (const text of ["\ud800", "\udfff", "A\ud800", "\udc00A", "😀\ud800"]) {
 		assert.throws(() => codepointLength(text), NativeRuntimeError);
 		// An invalid suffix is rejected even when index zero would otherwise be valid.
-		assert.ok(codepointAt(text, 0) instanceof ThrowableValue);
+		assert.ok(codepointAt(text, 0n) instanceof ThrowableValue);
 	}
-	for (const value of [-1, 0xd800, 0xdbff, 0xdc00, 0xdfff, 0x110000, 1.5])
-		assert.ok(fromCodepoint(value) instanceof ThrowableValue);
+	for (const value of [
+		-1n,
+		0xd800n,
+		0xdbffn,
+		0xdc00n,
+		0xdfffn,
+		0x110000n,
+		18446744073709551615n,
+		1.5,
+	])
+		assert.ok(fromCodepoint(value as bigint) instanceof ThrowableValue);
 });
 
 test("checked native arithmetic agrees with exact BigInt at both int32 boundaries", () => {
@@ -61,13 +72,13 @@ test("checked native arithmetic agrees with exact BigInt at both int32 boundarie
 						: op === "-"
 							? left - right
 							: left * right;
-				const result = checkedInt32(op, a, b);
+				const result = checkedInt32(op, left, right);
 				if (exact < -2147483648n || exact > 2147483647n)
 					assert.ok(
 						result instanceof ThrowableValue,
 						`${a} ${op} ${b}`,
 					);
-				else assert.equal(result, Number(exact), `${a} ${op} ${b}`);
+				else assert.equal(result, exact, `${a} ${op} ${b}`);
 			}
 });
 
@@ -80,7 +91,7 @@ test("real Noma stdlib fixture covers public APIs, immutability, recovery and I/
 			),
 			host,
 		),
-		0,
+		0n,
 	);
 	assert.equal(host.stdout, "😀 5");
 });
@@ -94,9 +105,29 @@ test("documented stdlib example loads string, number and io together", async () 
 			),
 			host,
 		),
-		0,
+		0n,
 	);
 	assert.equal(host.stdout, "😀 3 30");
+});
+
+test("real Noma native fixture formats all integer widths and preserves uint64 array values", async () => {
+	const host = new MemoryIO();
+	assert.equal(
+		await runFile(
+			fileURLToPath(
+				new URL(
+					"../../test/fixtures/numeric-native.noma",
+					import.meta.url,
+				),
+			),
+			host,
+		),
+		0n,
+	);
+	assert.equal(
+		host.stdout,
+		"-128\n-32768\n-2147483648\n-9223372036854775808\n255\n65535\n4294967295\n18446744073709551615\n",
+	);
 });
 
 test("public APIs have Noma bodies and typed contracts without TSAny", async () => {
@@ -122,6 +153,7 @@ test("public APIs have Noma bodies and typed contracts without TSAny", async () 
 			"repeat",
 		],
 		"std/number": [
+			"toString",
 			"absInt32",
 			"minInt32",
 			"maxInt32",
@@ -182,10 +214,18 @@ test("core natives link through existing ABI and reject malformed inputs", async
 		(module) => module.id === "std/internal/string",
 	)!;
 	const at = program.functions.get(internal)!.get("codepointAt")!;
-	assert.ok((await registry.call(at, ["x", 1])) instanceof ThrowableValue);
+	assert.ok((await registry.call(at, ["x", 1n])) instanceof ThrowableValue);
 	const from = program.functions.get(internal)!.get("fromCodepoint")!;
-	assert.ok((await registry.call(from, [0xd800])) instanceof ThrowableValue);
-	assert.equal(await registry.call(from, [0x1f600]), "😀");
+	assert.ok((await registry.call(from, [0xd800n])) instanceof ThrowableValue);
+	assert.equal(await registry.call(from, [0x1f600n]), "😀");
+	await assert.rejects(
+		registry.call(from, [0x1f600]),
+		/Native input contract violation/,
+	);
+	await assert.rejects(
+		registry.call(from, [18446744073709551615n]),
+		/Native input contract violation/,
+	);
 	assert.throws(
 		() => new Interpreter(program, new NativeRegistry()),
 		/Unregistered native/,
@@ -202,7 +242,7 @@ test("malformed scalar strings fail explicitly rather than exposing UTF-16 index
 				t,
 				`use "std/string" as str; fn main() -> int32 { ${expression} catch e { return 7; }; return 0; }`,
 			),
-			7,
+			7n,
 		);
 	await assert.rejects(
 		run(
@@ -228,7 +268,7 @@ test("mutable stdlib arguments still require snapshot, including primitive numbe
 			t,
 			'use "std/number" as num; fn main() -> int32 { let mut value: int32 = 1; return num.checkedAddInt32(snapshot value, 2) otherwise e { 0 }; }',
 		),
-		3,
+		3n,
 	);
 });
 
@@ -249,12 +289,13 @@ test("stdlib helpers and low-level native modules remain inaccessible to applica
 
 test("strict decimal parsing accepts signs/zeros and rejects nondecimal or spaced text", async (t) => {
 	for (const [text, expected] of [
-		["0", 0],
-		["+0", 0],
-		["-0", 0],
-		["00000000000000000000000000000000000000000001", 1],
-		["-42", -42],
-		["2147483647", 2147483647],
+		["0", 0n],
+		["+0", 0n],
+		["-0", 0n],
+		["00000000000000000000000000000000000000000001", 1n],
+		["-42", -42n],
+		["2147483647", 2147483647n],
+		["-2147483648", -2147483648n],
 	] as const)
 		assert.equal(
 			await run(
@@ -284,7 +325,7 @@ test("strict decimal parsing accepts signs/zeros and rejects nondecimal or space
 				t,
 				`use "std/number" as num; fn main() -> int32 { num.parseInt32(${JSON.stringify(text)}) catch e { return 7; }; return 0; }`,
 			),
-			7,
+			7n,
 			text,
 		);
 });
@@ -297,7 +338,7 @@ test("checked failures can be raised and recovered through Noma functions", asyn
 	fn add(a: int32, b: int32) -> int32 | throwable { return num.checkedAddInt32(a, b) catch e { raise e; }; }
 	fn main() -> int32 { add(-2147483648, -1) catch e { if e.message == "int32 arithmetic overflow" { return 7; } return 8; }; return 0; }`,
 		),
-		7,
+		7n,
 	);
 });
 
@@ -318,11 +359,11 @@ test("overflowing literal arithmetic is a compile error before any execution", a
 		);
 	assert.equal(
 		await run(t, "fn main() -> int32 { return -2147483648 / 1; }"),
-		-2147483648,
+		-2147483648n,
 	);
 	assert.equal(
 		await run(t, "fn main() -> int32 { return -2147483648 % -1; }"),
-		0,
+		0n,
 	);
 });
 

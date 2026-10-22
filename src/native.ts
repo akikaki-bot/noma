@@ -4,15 +4,41 @@ import type { CheckedProgram, FunctionInfo } from "./checker.js";
 import {
 	EOF_TYPE,
 	INT32,
+	INT8,
+	INT16,
+	INT64,
+	UINT8,
+	UINT16,
+	UINT32,
+	UINT64,
+	FLOAT32,
+	FLOAT64,
 	equivalent,
+	substitute,
 	STRING,
 	THROWABLE,
 	union,
 	VOID,
+	variants,
 } from "./types.js";
 import type { Type } from "./types.js";
-import { clone, hostError, matches } from "./values.js";
+import {
+	clone,
+	freezeOwned,
+	hostError,
+	matches,
+	getMemberType,
+	setMemberType,
+} from "./values.js";
 import type { Value } from "./values.js";
+import {
+	arrayNativeNames,
+	arrayNativeOperation,
+	arraySignature,
+} from "./array-abi.js";
+import type { ArrayOperation } from "./array-abi.js";
+import { invokeArray } from "./array-runtime.js";
+import { isIntegerType, isNumericType } from "./numeric.js";
 import {
 	checkedInt32,
 	codepointAt,
@@ -31,14 +57,107 @@ interface NativeBinding {
 	result: Type;
 	invoke: (args: readonly Value[]) => Promise<unknown>;
 }
+/** Explicit concrete identity for native results with overlapping numeric types.
+ * The integer itself remains a bigint; this carrier exists only at the ABI. */
+export class NativeValue {
+	constructor(
+		readonly value: Value,
+		readonly type: Type,
+	) {}
+}
+export interface NativeResult {
+	value: Value;
+	type: Type;
+}
+
+function runtimeType(value: Value, contract: Type, hint?: Type): Type {
+	const actual = hint?.kind === "union" ? undefined : hint;
+	if (!matches(value, contract, actual))
+		throw new Error("Value does not match its concrete runtime type");
+	if (contract.kind === "union") {
+		const numericCandidates = variants(contract).filter((type) =>
+			typeof value === "bigint"
+				? isIntegerType(type.kind)
+				: typeof value === "number" &&
+					isNumericType(type.kind) &&
+					!isIntegerType(type.kind),
+		);
+		if (!actual && numericCandidates.length > 1)
+			throw new Error(
+				"Native value requires concrete type metadata for an ambiguous numeric union",
+			);
+		const candidates = variants(contract).filter((type) =>
+			matches(value, type, actual),
+		);
+		if (candidates.length !== 1)
+			throw new Error(
+				"Native value requires concrete type metadata for an ambiguous union",
+			);
+		return runtimeType(value, candidates[0]!, actual);
+	}
+	if (contract.kind === "array") {
+		const array = value as Value[];
+		for (let index = 0; index < array.length; index++) {
+			const type = runtimeType(
+				array[index]!,
+				contract.element,
+				getMemberType(array, index) ??
+					(actual?.kind === "array" ? actual.element : undefined),
+			);
+			setMemberType(array, index, type);
+		}
+	}
+	if (contract.kind === "struct") {
+		const record = value as Record<string, Value>;
+		const fields = new Map<string, Type>();
+		for (const [key, field] of contract.fields) {
+			const type = runtimeType(
+				record[key]!,
+				field,
+				getMemberType(record, key) ??
+					(actual?.kind === "struct"
+						? actual.fields.get(key)
+						: undefined),
+			);
+			setMemberType(record, key, type);
+			fields.set(key, type);
+		}
+		return { kind: "struct", fields };
+	}
+	return contract;
+}
+export interface NativeCell {
+	get(): Value;
+	set(value: Value): void;
+}
+type NativeEntry =
+	| (NativeBinding & { kind: "copy" })
+	| { kind: "array"; operation: ArrayOperation };
+function isCell(value: Value | NativeCell): value is NativeCell {
+	return (
+		value !== null &&
+		typeof value === "object" &&
+		"get" in value &&
+		typeof value.get === "function" &&
+		"set" in value &&
+		typeof value.set === "function"
+	);
+}
 export class NativeRegistry {
-	private readonly bindings = new Map<string, NativeBinding>();
+	private readonly bindings = new Map<string, NativeEntry>();
+	constructor() {
+		for (const [name, operation] of arrayNativeNames)
+			this.bindings.set(`std/internal/arr#${name}`, {
+				kind: "array",
+				operation,
+			});
+	}
 	register(key: string, binding: NativeBinding): void {
 		if (this.bindings.has(key))
 			throw new Error(`Duplicate native binding: ${key}`);
-		this.bindings.set(key, binding);
+		this.bindings.set(key, { ...binding, kind: "copy" });
 	}
-	private binding(fn: FunctionInfo): NativeBinding {
+	private binding(fn: FunctionInfo): NativeEntry {
 		const key = `${fn.module.id}#${fn.declaration.name}`,
 			binding = this.bindings.get(key);
 		if (!fn.module.trusted || !fn.declaration.native || !binding)
@@ -48,11 +167,43 @@ export class NativeRegistry {
 			);
 		return binding;
 	}
+	private arrayContract(fn: FunctionInfo, operation: ArrayOperation): void {
+		const array = operation === "create" ? fn.result : fn.params[0];
+		const signature =
+			array?.kind === "array"
+				? arraySignature(operation, array.element)
+				: undefined;
+		if (
+			arrayNativeOperation(fn.module, fn.declaration.name) !==
+				operation ||
+			fn.intrinsic !== `array.${operation}` ||
+			fn.declaration.public ||
+			fn.declaration.async ||
+			fn.declaration.body ||
+			fn.declaration.typeParams?.length !== 1 ||
+			!signature ||
+			fn.params.length !== signature.params.length ||
+			!equivalent(fn.result, signature.result) ||
+			fn.params.some(
+				(type, i) =>
+					!equivalent(type, signature.params[i]!) ||
+					fn.declaration.params[i]?.mutable !== signature.mutable[i],
+			)
+		)
+			throw new LanguageError(
+				fn.declaration.span,
+				"Native declaration does not match the registered array ABI",
+			);
+	}
 	link(program: CheckedProgram): void {
 		for (const module of program.program.modules)
 			for (const fn of program.functions.get(module)!.values()) {
 				if (!fn.declaration.native) continue;
 				const binding = this.binding(fn);
+				if (binding.kind === "array") {
+					this.arrayContract(fn, binding.operation);
+					continue;
+				}
 				if (
 					fn.params.length !== binding.inputs.length ||
 					fn.params.some(
@@ -69,31 +220,185 @@ export class NativeRegistry {
 				}
 			}
 	}
-	async call(fn: FunctionInfo, args: readonly Value[]): Promise<Value> {
+	async call(
+		fn: FunctionInfo,
+		args: readonly (Value | NativeCell)[],
+		callerTypes: ReadonlyMap<string, Type> = new Map(),
+	): Promise<Value> {
+		return (await this.callTyped(fn, args, callerTypes)).value;
+	}
+	async callTyped(
+		fn: FunctionInfo,
+		args: readonly (Value | NativeCell)[],
+		callerTypes: ReadonlyMap<string, Type> = new Map(),
+	): Promise<NativeResult> {
 		const binding = this.binding(fn);
+		if (binding.kind === "array") {
+			this.arrayContract(fn, binding.operation);
+			if (
+				args.length !== fn.params.length ||
+				args.some(
+					(arg, i) =>
+						isCell(arg) !== fn.declaration.params[i]!.mutable,
+				)
+			)
+				throw new LanguageError(
+					fn.declaration.span,
+					"Native input contract violation: array borrow mode",
+				);
+			const values = args.map((arg) => (isCell(arg) ? arg.get() : arg));
+			for (let i = 0; i < values.length; i++) {
+				const type = getMemberType(args, i);
+				if (type) setMemberType(values, i, type);
+			}
+			if (
+				values.some(
+					(value, i) =>
+						!matches(
+							value,
+							substitute(fn.params[i]!, callerTypes),
+							getMemberType(values, i),
+						),
+				)
+			)
+				throw new LanguageError(
+					fn.declaration.span,
+					"Native input contract violation",
+				);
+			try {
+				for (let index = 0; index < values.length; index++)
+					setMemberType(
+						values,
+						index,
+						runtimeType(
+							values[index]!,
+							substitute(fn.params[index]!, callerTypes),
+							getMemberType(values, index),
+						),
+					);
+			} catch (error) {
+				throw new LanguageError(
+					fn.declaration.span,
+					`Native input contract violation: ${error instanceof Error ? error.message : String(error)}`,
+				);
+			}
+			let resultHint: Type | undefined;
+			if (
+				binding.operation === "get" ||
+				binding.operation === "pop" ||
+				binding.operation === "remove"
+			) {
+				const array = values[0] as Value[];
+				const index =
+					binding.operation === "pop"
+						? array.length - 1
+						: typeof values[1] === "bigint" &&
+							  values[1] >= 0n &&
+							  values[1] < BigInt(array.length)
+							? Number(values[1])
+							: -1;
+				resultHint = getMemberType(array, index);
+			}
+			let result: Value;
+			try {
+				result = invokeArray(binding.operation, values);
+			} catch (error) {
+				throw new LanguageError(
+					fn.declaration.span,
+					`Array operation failed: ${error instanceof Error ? error.message : String(error)}`,
+				);
+			}
+			if (!matches(result, substitute(fn.result, callerTypes)))
+				throw new LanguageError(
+					fn.declaration.span,
+					"Native result contract violation",
+				);
+			try {
+				return {
+					value: freezeOwned(result),
+					type: runtimeType(
+						result,
+						substitute(fn.result, callerTypes),
+						resultHint,
+					),
+				};
+			} catch (error) {
+				throw new LanguageError(
+					fn.declaration.span,
+					`Native result contract violation: ${error instanceof Error ? error.message : String(error)}`,
+				);
+			}
+		}
 		if (
 			args.length !== binding.inputs.length ||
-			args.some((value, index) => !matches(value, binding.inputs[index]!))
+			args.some(
+				(value, index) =>
+					isCell(value) ||
+					!matches(
+						value,
+						binding.inputs[index]!,
+						getMemberType(args, index),
+					),
+			)
 		)
 			throw new LanguageError(
 				fn.declaration.span,
 				"Native input contract violation",
 			);
+		try {
+			for (let index = 0; index < args.length; index++)
+				runtimeType(
+					args[index] as Value,
+					binding.inputs[index]!,
+					getMemberType(args, index),
+				);
+		} catch (error) {
+			throw new LanguageError(
+				fn.declaration.span,
+				`Native input contract violation: ${error instanceof Error ? error.message : String(error)}`,
+			);
+		}
 		let result: unknown;
 		try {
-			result = await binding.invoke(
-				args.map((value) => clone(value, true)),
-			);
+			const copied = args.map((value) => clone(value as Value, true));
+			for (let i = 0; i < copied.length; i++) {
+				const type = getMemberType(args, i);
+				if (type) setMemberType(copied, i, type);
+			}
+			result = await binding.invoke(copied);
 		} catch (error) {
-			if (!(error instanceof NativeRuntimeError)) throw error;
-			throw new LanguageError(fn.declaration.span, error.message);
+			if (error instanceof NativeRuntimeError)
+				throw new LanguageError(fn.declaration.span, error.message);
+			if (matches(hostError(error), binding.result))
+				result = hostError(error);
+			else
+				throw new LanguageError(
+					fn.declaration.span,
+					`Native execution failed: ${error instanceof Error ? error.message : String(error)}`,
+				);
 		}
-		if (!matches(result, binding.result) || !matches(result, fn.result))
+		let resultType: Type | undefined;
+		if (result instanceof NativeValue) {
+			resultType = result.type;
+			result = result.value;
+		}
+		if (
+			!matches(result, binding.result, resultType) ||
+			!matches(result, fn.result, resultType)
+		)
 			throw new LanguageError(
 				fn.declaration.span,
 				"Native result contract violation",
 			);
-		return clone(result, true);
+		try {
+			const type = runtimeType(result, binding.result, resultType);
+			return { value: clone(result, true), type };
+		} catch (error) {
+			throw new LanguageError(
+				fn.declaration.span,
+				`Native result contract violation: ${error instanceof Error ? error.message : String(error)}`,
+			);
+		}
 	}
 }
 export function createIORegistry(host: IOHost): NativeRegistry {
@@ -133,6 +438,25 @@ export function createIORegistry(host: IOHost): NativeRegistry {
 
 /** Pure standard-library bindings also belong to the default I/O registry. */
 export function registerCoreNatives(registry: NativeRegistry): void {
+	registry.register("std/internal/number#numericToString", {
+		inputs: [
+			union([
+				INT8,
+				INT16,
+				INT32,
+				INT64,
+				UINT8,
+				UINT16,
+				UINT32,
+				UINT64,
+				FLOAT32,
+				FLOAT64,
+			]),
+		],
+		result: STRING,
+		invoke: async (args) =>
+			Object.is(args[0], -0) ? "-0" : String(args[0]),
+	});
 	registry.register("std/internal/string#codepointLength", {
 		inputs: [STRING],
 		result: INT32,
@@ -142,12 +466,12 @@ export function registerCoreNatives(registry: NativeRegistry): void {
 		inputs: [STRING, INT32],
 		result: union([INT32, THROWABLE]),
 		invoke: async (args) =>
-			codepointAt(args[0] as string, args[1] as number),
+			codepointAt(args[0] as string, args[1] as bigint),
 	});
 	registry.register("std/internal/string#fromCodepoint", {
 		inputs: [INT32],
 		result: union([STRING, THROWABLE]),
-		invoke: async (args) => fromCodepoint(args[0] as number),
+		invoke: async (args) => fromCodepoint(args[0] as bigint),
 	});
 	for (const [name, op] of [
 		["checkedAdd", "+"],
@@ -158,7 +482,7 @@ export function registerCoreNatives(registry: NativeRegistry): void {
 			inputs: [INT32, INT32],
 			result: union([INT32, THROWABLE]),
 			invoke: async (args) =>
-				checkedInt32(op, args[0] as number, args[1] as number),
+				checkedInt32(op, args[0] as bigint, args[1] as bigint),
 		});
 	}
 }

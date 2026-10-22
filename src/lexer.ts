@@ -66,6 +66,26 @@ export function lex(source: string, file = "<source>"): Token[] {
 			let text = take();
 			while (offset < source.length && /[0-9]/u.test(source[offset]!))
 				text += take();
+			if (
+				source[offset] === "." &&
+				/[0-9]/u.test(source[offset + 1] ?? "")
+			) {
+				text += take();
+				while (offset < source.length && /[0-9]/u.test(source[offset]!))
+					text += take();
+			}
+			if (/[eE]/u.test(source[offset] ?? "")) {
+				text += take();
+				if (/[+-]/u.test(source[offset] ?? "")) text += take();
+				if (!/[0-9]/u.test(source[offset] ?? ""))
+					throw new LanguageError(
+						span,
+						"Expected exponent digits",
+						range(),
+					);
+				while (offset < source.length && /[0-9]/u.test(source[offset]!))
+					text += take();
+			}
 			tokens.push({ kind: "number", text, span, range: range() });
 			continue;
 		}
@@ -99,9 +119,18 @@ export function lex(source: string, file = "<source>"): Token[] {
 		}
 		const pair = source.slice(offset, offset + 2);
 		if (
-			["->", "=>", "==", "!=", "<=", ">=", "&&", "||", "++"].includes(
-				pair,
-			)
+			[
+				"->",
+				"=>",
+				"==",
+				"!=",
+				"<=",
+				">=",
+				"&&",
+				"||",
+				"++",
+				"--",
+			].includes(pair)
 		) {
 			take();
 			take();

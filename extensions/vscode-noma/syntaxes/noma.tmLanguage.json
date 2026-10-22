@@ -49,7 +49,7 @@
 				},
 				{
 					"name": "constant.numeric.integer.noma",
-					"match": "\\b[0-9]+\\b"
+					"match": "\\b[0-9]+(?:\\.[0-9]+)?(?:[eE][+-]?[0-9]+)?\\b"
 				},
 				{
 					"name": "entity.name.function.call.noma",
@@ -338,13 +338,13 @@
 		},
 		"builtin-types": {
 			"name": "support.type.builtin.noma",
-			"match": "\\b(?:int32|string|bool|void|never|throwable|Type|Array|TSAny)\\b"
+			"match": "\\b(?:u?int(?:8|16|32|64)|float(?:32|64)|string|bool|void|never|throwable|Type|Array|Future|TSAny)\\b"
 		},
 		"keywords": {
 			"patterns": [
 				{
 					"name": "storage.modifier.noma",
-					"match": "\\b(?:pub|mut|native|compilerOnly)\\b"
+					"match": "\\b(?:pub|mut|native|compilerOnly|async)\\b"
 				},
 				{
 					"name": "storage.type.noma",
@@ -352,7 +352,7 @@
 				},
 				{
 					"name": "keyword.control.noma",
-					"match": "\\b(?:return|if|else|while|break|match|case|raise|catch|otherwise)\\b"
+					"match": "\\b(?:return|if|else|while|break|match|case|raise|catch|otherwise|await)\\b"
 				},
 				{
 					"name": "keyword.control.import.noma",
@@ -360,7 +360,7 @@
 				},
 				{
 					"name": "keyword.operator.snapshot.noma",
-					"match": "\\bsnapshot\\b"
+					"match": "\\b(?:snapshot|read)\\b"
 				},
 				{
 					"name": "keyword.other.intrinsic.noma",

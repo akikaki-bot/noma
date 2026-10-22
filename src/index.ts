@@ -19,11 +19,14 @@ export { lex } from "./lexer.js";
 export { Interpreter } from "./interpreter.js";
 export {
 	NativeRegistry,
+	NativeValue,
 	NodeIOHost,
 	createIORegistry,
 	registerCoreNatives,
 } from "./native.js";
 export { ThrowableValue } from "./values.js";
+export { numericJsonReplacer, numericJsonReviver } from "./numeric.js";
+export { serializeValue, deserializeValue } from "./serialization.js";
 export { analyzeFile, AnalysisSnapshot } from "./analysis.js";
 export type {
 	AnalysisOptions,

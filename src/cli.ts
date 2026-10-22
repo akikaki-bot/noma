@@ -1,6 +1,7 @@
 import { compile } from "./index.js";
 import { Interpreter } from "./interpreter.js";
 import { createIORegistry, NodeIOHost } from "./native.js";
+import { safeHostInteger } from "./numeric.js";
 
 async function main(): Promise<void> {
 	const args = process.argv.slice(2),
@@ -27,7 +28,8 @@ async function main(): Promise<void> {
 			return;
 		}
 		const result = await new Interpreter(program, registry).run();
-		if (typeof result === "number") process.exitCode = result;
+		if (typeof result === "bigint")
+			process.exitCode = safeHostInteger(result);
 	} finally {
 		await host.dispose();
 	}

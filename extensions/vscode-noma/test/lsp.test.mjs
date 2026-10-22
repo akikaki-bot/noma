@@ -183,8 +183,79 @@ async function start(
 	};
 }
 
+test("JSON-RPC preserves numeric diagnostics, uint64 hover and all concrete numeric completions", async (t) => {
+	const host = await start(t);
+	const text =
+		"fn identity<T>(x:T)->T{return x;} fn f()->void{let maximum:uint64=identity<uint64>(18446744073709551615);}";
+	const target = await host.open("numeric.noma", text);
+	await host.diagnostics(
+		target,
+		(d) => d.version === 1 && d.diagnostics.length === 0,
+	);
+	const hover = await host.request(
+		"hover",
+		target,
+		position(text, "maximum"),
+	);
+	assert.match(hover.contents.value, /uint64/);
+	const items = await host.request(
+		"completion",
+		target,
+		position(text, "let maximum"),
+	);
+	for (const name of [
+		"int8",
+		"int16",
+		"int32",
+		"int64",
+		"uint8",
+		"uint16",
+		"uint32",
+		"uint64",
+		"float32",
+		"float64",
+	])
+		assert.ok(
+			items.some((item) => item.label === name),
+			name,
+		);
+	let version = 1;
+	for (const [source, message] of [
+		["fn f()->void{let n:uint8=256;}", /uint8 range/],
+		["fn f()->void{let n:uint64=-1;}", /range|overflow/],
+		["fn f()->void{let n:uint8=255+1;}", /overflow/],
+		[
+			"fn f()->void{let a:uint8=1;let b:uint16=2;a+b;}",
+			/Expected|matching/,
+		],
+		[
+			"fn f()->void{let n:float64=(float64)(uint64)9007199254740993;}",
+			/Lossy/,
+		],
+	]) {
+		version = await host.change(target, source);
+		const diagnostic = await host.diagnostics(
+			target,
+			(d) =>
+				d.version === version &&
+				message.test(d.diagnostics[0]?.message),
+		);
+		assert.equal(diagnostic.diagnostics[0].severity, 1);
+	}
+	version = await host.change(target, text);
+	await host.diagnostics(
+		target,
+		(d) => d.version === version && d.diagnostics.length === 0,
+	);
+});
+
 test("LSP advertises supported features and uses bundled stdlib without executing Noma", async (t) => {
 	const host = await start(t);
+	assert.equal(
+		host.initialization.serverInfo.version,
+		JSON.parse(await readFile(new URL("package.json", extension), "utf8"))
+			.version,
+	);
 	const capabilities = host.initialization.capabilities;
 	for (const key of [
 		"hoverProvider",
@@ -223,6 +294,147 @@ test("LSP advertises supported features and uses bundled stdlib without executin
 	);
 	assert.ok(
 		!completions.some((item) => /TSAny|writeStdout/.test(item.label)),
+	);
+});
+
+test("JSON-RPC uses new borrowing/array/Future diagnostics on unsaved edits and recovers after fixes", async (t) => {
+	const host = await start(t);
+	const cases = [
+		["fn main()->void{[1,2];}", /expected array type/],
+		[
+			"fn inspect(a:int32,mut b:int32)->void{} fn main()->void{let mut n:int32=1;inspect(read n,n);}",
+			/mutate and read/,
+		],
+		[
+			"fn main()->void{let mut n:int32=1;let retained:int32=read n;}",
+			/borrowed value/,
+		],
+		[
+			"async fn task()->int32{return 42;} fn main()->void{let mut pending:Future<int32>=task();}",
+			/cannot be mutable/,
+		],
+		[
+			"async fn task()->int32{return 42;} fn main()->void{let pending:Future<int32>=task();snapshot pending;}",
+			/non-copyable/,
+		],
+		[
+			"async fn task()->int32{return 42;} fn main()->int32{return await task();}",
+			/async function/,
+		],
+		[
+			"async fn task()->int32{return 42;} async fn main()->int32{let pending:Future<int32>=task();if true{await pending;}return await pending;}",
+			/consumed or moved/,
+		],
+	];
+	const fixed =
+		'use "std/arr" as arr; async fn task()->int32{return 42;} pub async fn main()->int32{let mut values:Array<int32>=[1];let count:int32=arr.length<int32>(read values);return await task();}';
+	const target = await host.open("new-diagnostics.noma", fixed);
+	await host.diagnostics(
+		target,
+		(d) => d.version === 1 && d.diagnostics.length === 0,
+	);
+	let version = 1;
+	for (const [text, message] of cases) {
+		version = await host.change(target, text);
+		const diagnostic = await host.diagnostics(
+			target,
+			(d) =>
+				d.version === version &&
+				message.test(d.diagnostics[0]?.message),
+		);
+		assert.equal(diagnostic.diagnostics[0].severity, 1);
+		version = await host.change(target, fixed);
+		await host.diagnostics(
+			target,
+			(d) => d.version === version && d.diagnostics.length === 0,
+		);
+	}
+});
+
+test("JSON-RPC provides array exports, async error result types and definitions/references", async (t) => {
+	const host = await start(t);
+	const source =
+		'use "std/arr" as arr; async fn load()->string|throwable{return "ok";} pub async fn main()->int32{let pending:Future<string|throwable>=load();let text:string=await pending otherwise error{"fallback"};return 0;}';
+	const target = await host.open("new-assistance.noma", source);
+	await host.diagnostics(
+		target,
+		(d) => d.version === 1 && d.diagnostics.length === 0,
+	);
+	const hover = await host.request(
+		"hover",
+		target,
+		position(source, "await pending"),
+	);
+	assert.equal(hover.contents.value, "string | throwable");
+	const pending = await host.request(
+		"hover",
+		target,
+		position(source, "pending:Future"),
+	);
+	assert.match(pending.contents.value, /Future<string \| throwable>/);
+	const call = TextDocument.create("", "noma", 1, source).positionAt(
+		source.lastIndexOf("load()"),
+	);
+	const definition = await host.request("definition", target, call);
+	assert.equal(definition.uri, target);
+	assert.deepEqual(definition.range.start, position(source, "load()->"));
+	const references = await host.request("references", target, call, {
+		context: { includeDeclaration: true },
+	});
+	assert.equal(references.length, 2);
+	const help = await host.request(
+		"signatureHelp",
+		target,
+		TextDocument.create("", "noma", 1, source).positionAt(
+			source.lastIndexOf("load()") + 5,
+		),
+	);
+	assert.equal(
+		help.signatures[0].label,
+		"load() -> Future<string | throwable>",
+	);
+	let text = 'use "std/arr" as arr; fn main()->void{arr. }';
+	await host.change(target, text);
+	let items = await host.request(
+		"completion",
+		target,
+		position(text, "arr. }", 4),
+	);
+	assert.deepEqual(items.map((i) => i.label).sort(), [
+		"create",
+		"get",
+		"length",
+		"pop",
+		"push",
+		"remove",
+		"set",
+	]);
+	assert.ok(
+		items.every(
+			(i) => !i.label.endsWith("Array") && !i.detail.includes("native"),
+		),
+	);
+	text =
+		"type Box=struct{length:int32;};fn main()->void{let box:Box=Box{length:2};box. }";
+	await host.change(target, text);
+	items = await host.request(
+		"completion",
+		target,
+		position(text, "box. }", 4),
+	);
+	assert.ok(
+		items.some((i) => i.label === "length" && i.detail === "length: int32"),
+	);
+	text = 'use "std/arr" as arr; fn main()->void{arr.get<Array<int32>>(';
+	await host.change(target, text);
+	const generic = await host.request(
+		"signatureHelp",
+		target,
+		TextDocument.create("", "noma", 1, text).positionAt(text.length),
+	);
+	assert.equal(
+		generic.signatures[0].label,
+		"arr.get<(int32)[]>(array: ((int32)[])[], index: int32) -> (int32)[] | throwable",
 	);
 });
 
@@ -764,5 +976,72 @@ test("JSON-RPC signature help highlights arguments and instantiates generics wit
 		(d) =>
 			d.version === 3 &&
 			/explicit type arguments/.test(d.diagnostics[0]?.message),
+	);
+});
+
+test("JSON-RPC diagnoses Future consumption and exposes async signatures and read/array assistance", async (t) => {
+	const host = await start(t);
+	const prefix =
+		'use "std/arr" as arr; async fn calculate()->int32{return 42;} ';
+	let text =
+		prefix +
+		"async fn main()->int32{let f:Future<int32>=calculate();await f;return await f;}";
+	const target = await host.open("futures.noma", text);
+	await host.diagnostics(target, (d) =>
+		/consumed or moved/.test(d.diagnostics[0]?.message),
+	);
+	text =
+		prefix +
+		"async fn main()->int32{let f:Future<int32>=calculate();return await f;}";
+	await host.change(target, text);
+	await host.diagnostics(
+		target,
+		(d) => d.version === 2 && d.diagnostics.length === 0,
+	);
+	const hover = await host.request(
+		"hover",
+		target,
+		position(text, "f:Future"),
+	);
+	assert.match(hover.contents.value, /Future<int32>/);
+	text = prefix + "async fn main()->void{let f:Future<int32>=calculate(); }";
+	await host.change(target, text);
+	let items = await host.request(
+		"completion",
+		target,
+		position(text, "; }", 2),
+	);
+	for (const name of ["read", "await", "async", "Future"])
+		assert.ok(
+			items.some((i) => i.label === name),
+			name,
+		);
+	text = prefix + "async fn main()->void{calculate(";
+	await host.change(target, text);
+	const help = await host.request(
+		"signatureHelp",
+		target,
+		TextDocument.create("", "noma", 1, text).positionAt(
+			text.lastIndexOf("calculate(") + 10,
+		),
+	);
+	assert.equal(help.signatures[0].label, "calculate() -> Future<int32>");
+	text = 'use "std/arr" as arr; fn main()->void{let a:Array<int32>=[1]; a. }';
+	await host.change(target, text);
+	items = await host.request("completion", target, position(text, "a. }", 2));
+	assert.ok(!items.some((i) => i.label === "length"));
+	text =
+		'use "std/arr" as arr; fn main()->void{let mut a:Array<int32>=[1]; arr.length<int32>(read a);}';
+	await host.change(target, text);
+	await host.diagnostics(
+		target,
+		(d) => d.version === 6 && d.diagnostics.length === 0,
+	);
+	text = "fn main()->void{let a:Array<int32>=[1];a.length;}";
+	await host.change(target, text);
+	await host.diagnostics(
+		target,
+		(d) =>
+			d.version === 7 && /no properties/.test(d.diagnostics[0]?.message),
 	);
 });

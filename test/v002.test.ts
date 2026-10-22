@@ -58,7 +58,7 @@ test("raise has never type and becomes a branded error result", async (t) => {
 			t,
 			`${fail} fn main() -> int32 { return fail() catch e { if e.message == "failure" { return 7; } return 8; }; }`,
 		),
-		7,
+		7n,
 	);
 });
 
@@ -70,7 +70,7 @@ test("raise unwinds only its function, can re-raise errors, and supports otherwi
 	fn relay() -> int32 | throwable { return fail() catch e { raise e; }; }
 	fn main() -> int32 { return relay() otherwise e { if e.message == "failure" { 11 } else { 12 } }; }`,
 		),
-		11,
+		11n,
 	);
 });
 
@@ -85,7 +85,7 @@ test("catch skips its handler on success; otherwise may return from the enclosin
 		return fail() otherwise e { return x; };
 	}`,
 		),
-		8,
+		8n,
 	);
 });
 
@@ -102,7 +102,7 @@ test("void | throwable interoperates with raise and std/io", async (t) => {
 	}`,
 			host,
 		),
-		4,
+		4n,
 	);
 	assert.equal(host.stdout, "bad\n");
 });
@@ -122,7 +122,7 @@ test("mutability comes only from the signature, including forwarding and unused 
 		return inc(a) + inc(snapshot b);
 	}`,
 		),
-		33,
+		33n,
 	);
 });
 
@@ -131,12 +131,12 @@ test("readonly aggregate parameters may forward readonly inputs but cannot mutat
 		await run(
 			t,
 			`
-	fn read(a: Array<int32>) -> int32 { return a[0] + 0; }
-	fn forward(a: Array<int32>) -> int32 { return read(a); }
+	fn inspect(a: Array<int32>) -> int32 { return a[0] + 0; }
+	fn forward(a: Array<int32>) -> int32 { return inspect(a); }
 	fn main() -> int32 { let mut a: Array<int32> = [12]; return forward(snapshot a); }
 	`,
 		),
-		12,
+		12n,
 	);
 });
 
@@ -157,7 +157,7 @@ test("snapshots isolate nested arrays and structs through subsequent calls and a
 		return copied.items[0].n + element.n + all.n;
 	}`,
 		),
-		30,
+		30n,
 	);
 });
 
@@ -182,7 +182,7 @@ test("explicit casts project nested fields, preserve structural equality and cop
 		return 1;
 	}`,
 		),
-		0,
+		0n,
 	);
 });
 
@@ -190,17 +190,18 @@ test("static casts handle arrays, primitive identity and provable union projecti
 	assert.equal(
 		await run(
 			t,
-			`${animals}
+			`use "std/arr" as arr; ${animals}
 	fn main() -> int32 {
 		let dog: Dog = Dog { name: "P", breed: "S" };
-		let a: Array<Animal> = (Animal[])[dog];
+		let dogs: Array<Dog> = [dog];
+		let a: Array<Animal> = (Animal[])dogs;
 		let u: Dog | Animal = dog;
 		let one: Animal = (Animal)u;
 		let empty: Animal[] = (Animal[])[];
-		return (int32)1 + a.length + empty.length;
+		return (int32)1 + arr.length<Animal>(a) + arr.length<Animal>(empty);
 	}`,
 		),
-		2,
+		2n,
 	);
 });
 
@@ -219,7 +220,7 @@ test("trycast checks runtime types and projects only target fields without coerc
 		return 2;
 	}`,
 		),
-		7,
+		7n,
 	);
 });
 
@@ -231,7 +232,8 @@ test("trycast supports runtime union narrowing, arrays, anonymous structures and
 	fn main() -> int32 {
 		let value: int32 | string = 13;
 		let n: int32 = typing.trycast(int32, value) catch e { return 1; };
-		let a: Array<int32> = typing.trycast(Array<int32>, [n]) catch e { return 2; };
+		let input: Array<int32> = [n];
+		let a: Array<int32> = typing.trycast(Array<int32>, input) catch e { return 2; };
 		let b: h.Box = typing.trycast(h.Box, struct { n: a[0], extra: true }) catch e { return 3; };
 		let c: struct { n: int32; } = typing.trycast(struct { n: int32; }, b) catch e { return 4; };
 		return c.n;
@@ -239,7 +241,7 @@ test("trycast supports runtime union narrowing, arrays, anonymous structures and
 			new MemoryIO(),
 			{ "helper.noma": "pub type Box = struct { n: int32; };" },
 		),
-		13,
+		13n,
 	);
 });
 
@@ -250,30 +252,31 @@ test("trycast failure is a catchable throwable and std/io loads alongside std/ty
 			t,
 			`${typing} use "std/io" as io;
 	fn main() -> int32 {
-		typing.trycast(int32[], ["bad"]) catch e {
+		let input: Array<string> = ["bad"];
+		typing.trycast(int32[], input) catch e {
 			io.puts(e.message) catch err { return 1; };
 			return 6;
 		}; return 2;
 	}`,
 			host,
 		),
-		6,
+		6n,
 	);
 	assert.match(host.stdout, /trycast:/);
 });
 
 test("runtime projection and snapshot freeze deeply and cannot leak discarded fields", () => {
-	const source = { n: [10], extra: "hidden" };
+	const source = { n: [10n], extra: "hidden" };
 	const target = {
 		kind: "struct" as const,
 		fields: new Map([["n", { kind: "array" as const, element: INT32 }]]),
 	};
 	const result = project(source, target) as Record<string, unknown>;
 	const saved = snapshot(source) as Record<string, unknown>;
-	source.n[0] = 99;
+	source.n[0] = 99n;
 	assert.deepEqual(Object.keys(result), ["n"]);
-	assert.deepEqual(result.n, [10]);
-	assert.deepEqual(saved.n, [10]);
+	assert.deepEqual(result.n, [10n]);
+	assert.deepEqual(saved.n, [10n]);
 	assert.ok(Object.isFrozen(result) && Object.isFrozen(result.n));
 	assert.ok(Object.isFrozen(saved) && Object.isFrozen(saved.n));
 	assert.throws(() => project("123", INT32), /does not conform/);
@@ -294,7 +297,7 @@ test("Union projections choose the most specific target independently of declara
 		return 0;
 	}`,
 		),
-		0,
+		0n,
 	);
 });
 test("trycast conservatively fails on incomparable overlapping Union projections", async (t) => {
@@ -308,7 +311,7 @@ test("trycast conservatively fails on incomparable overlapping Union projections
 		return 1;
 	}`,
 		),
-		7,
+		7n,
 	);
 });
 test("grouped values still support indexing and direct function calls", async (t) => {
@@ -318,7 +321,7 @@ test("grouped values still support indexing and direct function calls", async (t
 			`fn f(x: int32) -> int32 { return x; }
 	fn main() -> int32 { let a: int32[] = [3]; return (f)((a)[0]); }`,
 		),
-		3,
+		3n,
 	);
 });
 test("explicit struct contexts initialize Union fields without converting existing structures", async (t) => {
@@ -332,7 +335,7 @@ test("explicit struct contexts initialize Union fields without converting existi
 		return match(a.n) { case(n: int32) { n } case(s: string) { 0 } };
 	}`,
 		),
-		12,
+		12n,
 	);
 });
 test("imported names can construct and explicitly project public struct types", async (t) => {
@@ -350,7 +353,7 @@ test("imported names can construct and explicitly project public struct types", 
 				"helper.noma": `pub type Animal = struct { name: string; }; pub type Dog = struct { name: string; breed: string; };`,
 			},
 		),
-		0,
+		0n,
 	);
 });
 test("typing import resolution remains independent of module declaration order", async (t) => {
@@ -359,7 +362,7 @@ test("typing import resolution remains independent of module declaration order",
 			t,
 			`fn main() -> int32 { return typing.trycast(int32, 9) otherwise e { 0 }; } use "std/typing" as typing;`,
 		),
-		9,
+		9n,
 	);
 });
 test("match still recognizes structural coverage without implicitly projecting values", async (t) => {
@@ -370,13 +373,13 @@ test("match still recognizes structural coverage without implicitly projecting v
 	fn f(dog: Dog) -> string { return match(dog) { case(a: Animal) { a.breed + "!" } }; }
 	fn main() -> int32 { let dog: Dog = Dog { name: "P", breed: "S" }; if f(dog) == "S!" { return 0; } return 1; }`,
 		),
-		0,
+		0n,
 	);
 });
 test("eager aggregates propagate never from raise", async (t) => {
 	const checked = await check(
 		t,
-		`fn f() -> int32 | throwable { [raise "bad"] } fn main() -> void {}`,
+		`fn f() -> Array<int32> | throwable { [raise "bad"] } fn main() -> void {}`,
 	);
 	const f = checked.program.entry.ast.declarations[0]!;
 	if (f.kind !== "function") return assert.fail("Expected function");
@@ -386,7 +389,7 @@ test("eager aggregates propagate never from raise", async (t) => {
 			t,
 			`fn f() -> int32 | throwable { struct { x: raise "bad" } } fn main() -> int32 { return f() otherwise e { 8 }; }`,
 		),
-		8,
+		8n,
 	);
 });
 
@@ -459,7 +462,7 @@ const rejected: [string, string, RegExp][] = [
 	[
 		"readonly mutable length",
 		"fn f(x: int32) -> void {} fn main() -> void { let mut x: int32[] = [1]; f(x.length); }",
-		/requires snapshot/,
+		/Arrays have no properties/,
 	],
 	[
 		"mut requires storage",

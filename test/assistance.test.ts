@@ -72,6 +72,9 @@ test("completion supplies real keywords and UTF-16 replacement ranges for a part
 		"catch",
 		"otherwise",
 		"snapshot",
+		"read",
+		"async",
+		"await",
 		"use",
 		"as",
 	])
@@ -79,7 +82,7 @@ test("completion supplies real keywords and UTF-16 replacement ranges for a part
 			all.some((i) => i.label === name),
 			name,
 		);
-	for (const name of ["async", "await", "throw", "class"])
+	for (const name of ["throw", "class"])
 		assert.ok(!all.some((i) => i.label === name), name);
 });
 

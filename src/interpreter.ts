@@ -1,11 +1,23 @@
 import { LanguageError } from "./ast.js";
 import type { Block, Expression, Node, Statement } from "./ast.js";
 import type { CheckedProgram, FunctionInfo } from "./checker.js";
-import type { NativeRegistry } from "./native.js";
-import { substitute } from "./types.js";
+import type { NativeCell, NativeRegistry } from "./native.js";
+import { substitute, variants, projectionAlternative, VOID } from "./types.js";
 import type { Type } from "./types.js";
 import {
+	integerOperation,
+	isIntegerType,
+	isNumericType,
+	numericCast,
+	roundFloat,
+	safeHostInteger,
+} from "./numeric.js";
+import {
 	clone,
+	freezeOwned,
+	FutureValue,
+	getMemberType,
+	setMemberType,
 	matches,
 	project,
 	ProjectionError,
@@ -13,13 +25,17 @@ import {
 	ThrowableValue,
 } from "./values.js";
 import type { Value } from "./values.js";
-
-interface Cell {
-	get(): Value;
-	set(value: Value): void;
+type Cell = NativeCell & {
+	getType?: () => Type;
+	setType?: (type: Type) => void;
+};
+interface RuntimeResult {
+	value: Value;
+	type: Type;
 }
 class Environment {
 	readonly cells = new Map<string, Cell>();
+	readonly evaluatedTypes = new WeakMap<Expression, Type>();
 	readonly typeBindings: ReadonlyMap<string, Type>;
 	constructor(
 		readonly parent: Environment | null = null,
@@ -32,19 +48,36 @@ class Environment {
 		if (!cell) throw new Error(`Unresolved runtime binding: ${name}`);
 		return cell;
 	}
-	bind(name: string, value: Value, mutable: boolean): void {
-		let stored = clone(value, !mutable);
+	bind(name: string, value: Value, mutable: boolean, type: Type): void {
+		let stored = mutable ? clone(value, false) : freezeOwned(value);
+		let storedType = type;
 		this.cells.set(name, {
 			get: () => stored,
 			set: (next) => {
 				if (!mutable) throw new Error("Readonly cell");
 				stored = clone(next, false);
 			},
+			getType: () => storedType,
+			setType: (next) => {
+				storedType = next;
+			},
+		});
+	}
+	view(name: string, value: Value, type: Type): void {
+		this.cells.set(name, {
+			get: () => value,
+			getType: () => type,
+			set: () => {
+				throw new Error("Readonly view");
+			},
 		});
 	}
 }
 class ReturnSignal {
-	constructor(readonly value: Value) {}
+	constructor(
+		readonly value: Value,
+		readonly type: Type,
+	) {}
 }
 class BreakSignal {}
 export interface RunOptions {
@@ -53,6 +86,7 @@ export interface RunOptions {
 export class Interpreter {
 	private steps = 0;
 	private readonly maxSteps: number;
+	private readonly futureTypes = new WeakMap<FutureValue, Type>();
 	constructor(
 		readonly program: CheckedProgram,
 		readonly native: NativeRegistry,
@@ -64,12 +98,13 @@ export class Interpreter {
 		native.link(program);
 	}
 	async run(): Promise<Value> {
-		return this.call(
+		const { value } = await this.call(
 			this.program.functions
 				.get(this.program.program.entry)!
 				.get("main")!,
 			[],
 		);
+		return value instanceof FutureValue ? value.take() : value;
 	}
 	private tick(node: Node): void {
 		if (++this.steps > this.maxSteps)
@@ -79,9 +114,36 @@ export class Interpreter {
 		fn: FunctionInfo,
 		args: (Value | Cell)[],
 		callerTypes: ReadonlyMap<string, Type> = new Map(),
-	): Promise<Value> {
+	): Promise<RuntimeResult> {
+		if (fn.declaration.async) {
+			const future = new FutureValue(
+				async () => {
+					const result = await this.execute(fn, args, callerTypes);
+					this.futureTypes.set(future, result.type);
+					return result.value;
+				},
+				substitute(fn.result, callerTypes),
+				fn.declaration.span,
+			);
+			return {
+				value: future,
+				type: {
+					kind: "future",
+					result: substitute(fn.result, callerTypes),
+				},
+			};
+		}
+		return this.execute(fn, args, callerTypes);
+	}
+	private async execute(
+		fn: FunctionInfo,
+		args: (Value | Cell)[],
+		callerTypes: ReadonlyMap<string, Type>,
+	): Promise<RuntimeResult> {
 		this.tick(fn.declaration);
-		if (fn.declaration.native) return this.native.call(fn, args as Value[]);
+		if (fn.declaration.native) {
+			return this.native.callTyped(fn, args, callerTypes);
+		}
 		const bindings = new Map(
 			[...(fn.typeBindings ?? [])].map(([id, type]) => [
 				id,
@@ -100,27 +162,43 @@ export class Interpreter {
 				);
 			if (parameter.mutable)
 				env.cells.set(parameter.name, args[index] as Cell);
-			else env.bind(parameter.name, args[index] as Value, false);
+			else
+				env.view(
+					parameter.name,
+					args[index] as Value,
+					getMemberType(args, index) ??
+						substitute(fn.params[index]!, callerTypes),
+				);
 		});
 		let value: Value;
+		let type: Type;
 		try {
 			value = await this.block(fn.declaration.body!, env);
+			type = this.dynamicType(fn.declaration.body!, env);
 		} catch (signal) {
 			if (!(signal instanceof ReturnSignal)) throw signal;
 			value = signal.value;
+			type = signal.type;
 		}
 		if (!matches(value, substitute(fn.result, callerTypes)))
 			throw new LanguageError(
 				fn.declaration.span,
 				"Function result violates its checked type",
 			);
-		return clone(value, true);
+		return { value: freezeOwned(value), type };
 	}
 	private async block(block: Block, parent: Environment): Promise<Value> {
 		const env = new Environment(parent);
 		for (const statement of block.statements)
 			await this.statement(statement, env);
-		return block.tail ? this.expression(block.tail, env) : null;
+		const value = block.tail
+			? await this.expression(block.tail, env)
+			: null;
+		parent.evaluatedTypes.set(
+			block,
+			block.tail ? this.dynamicType(block.tail, env) : VOID,
+		);
+		return value;
 	}
 	private async statement(
 		statement: Statement,
@@ -128,16 +206,20 @@ export class Interpreter {
 	): Promise<void> {
 		this.tick(statement);
 		switch (statement.kind) {
-			case "let":
+			case "let": {
+				const value = await this.expression(statement.value, env);
 				env.bind(
 					statement.name,
-					await this.expression(statement.value, env),
+					value,
 					statement.mutable,
+					this.dynamicType(statement.value, env),
 				);
 				return;
+			}
 			case "assign": {
 				const cell = await this.lvalue(statement.target, env);
 				cell.set(await this.expression(statement.value, env));
+				cell.setType?.(this.dynamicType(statement.value, env));
 				return;
 			}
 			case "return":
@@ -145,6 +227,9 @@ export class Interpreter {
 					statement.value
 						? await this.expression(statement.value, env)
 						: null,
+					statement.value
+						? this.dynamicType(statement.value, env)
+						: VOID,
 				);
 			case "expression":
 				await this.expression(statement.expression, env);
@@ -169,6 +254,7 @@ export class Interpreter {
 			!value ||
 			typeof value !== "object" ||
 			Array.isArray(value) ||
+			value instanceof FutureValue ||
 			value instanceof ThrowableValue
 		)
 			throw new LanguageError(node.span, "Expected struct value");
@@ -181,13 +267,12 @@ export class Interpreter {
 	}
 	private index(value: Value, array: Value[], node: Node): number {
 		if (
-			typeof value !== "number" ||
-			!Number.isInteger(value) ||
-			value < 0 ||
-			value >= array.length
+			typeof value !== "bigint" ||
+			value < 0n ||
+			value >= BigInt(array.length)
 		)
 			throw new LanguageError(node.span, "Array index out of bounds");
-		return value;
+		return safeHostInteger(value);
 	}
 	private async lvalue(
 		expression: Expression,
@@ -201,6 +286,10 @@ export class Interpreter {
 			);
 			return {
 				get: () => object[expression.name]!,
+				getType: () =>
+					getMemberType(object, expression.name) ??
+					this.staticType(expression, env),
+				setType: (type) => setMemberType(object, expression.name, type),
 				set: (value) => {
 					object[expression.name] = clone(value, false);
 				},
@@ -218,6 +307,10 @@ export class Interpreter {
 			);
 			return {
 				get: () => object[index]!,
+				getType: () =>
+					getMemberType(object, index) ??
+					this.staticType(expression, env),
+				setType: (type) => setMemberType(object, index, type),
 				set: (value) => {
 					object[index] = clone(value, false);
 				},
@@ -225,44 +318,148 @@ export class Interpreter {
 		}
 		throw new LanguageError(expression.span, "Expected mutable storage");
 	}
-	private integer(value: number, node: Node): number {
-		if (
-			!Number.isInteger(value) ||
-			value < -2147483648 ||
-			value > 2147483647
-		)
-			throw new LanguageError(node.span, "int32 arithmetic overflow");
-		// int32 has one zero; do not leak the host's floating-point negative zero.
-		return value === 0 ? 0 : value;
+	private staticType(expression: Expression, env: Environment): Type {
+		return substitute(
+			this.program.expressionTypes.get(expression) ?? VOID,
+			env.typeBindings,
+		);
+	}
+	private dynamicType(expression: Expression, env: Environment): Type {
+		return (
+			env.evaluatedTypes.get(expression) ??
+			this.staticType(expression, env)
+		);
+	}
+	private selectType(value: Value, type: Type): Type {
+		if (type.kind !== "union") return type;
+		const numericCandidates = variants(type).filter((member) =>
+			typeof value === "bigint"
+				? isIntegerType(member.kind)
+				: typeof value === "number" &&
+					isNumericType(member.kind) &&
+					!isIntegerType(member.kind),
+		);
+		if (numericCandidates.length > 1)
+			throw new Error("Missing concrete numeric runtime type");
+		const candidates = variants(type).filter((member) =>
+			matches(value, member),
+		);
+		if (candidates.length === 1) return candidates[0]!;
+		// A numeric union must be selected through its producing expression,
+		// never from the magnitude of a bigint or the precision of a number.
+		if (candidates.some((member) => isNumericType(member.kind)))
+			throw new Error("Missing concrete numeric runtime type");
+		return candidates[0] ?? type;
+	}
+	private projectedType(value: Value, target: Type, source: Type): Type {
+		if (target.kind === "union") {
+			const selected = projectionAlternative(
+				target.members.filter((member) =>
+					matches(value, member, source),
+				),
+			);
+			return selected
+				? this.projectedType(value, selected, source)
+				: target;
+		}
+		return target;
 	}
 	private async expression(
 		expression: Expression,
 		env: Environment,
 	): Promise<Value> {
 		this.tick(expression);
+		env.evaluatedTypes.delete(expression);
+		try {
+			const value = await this.evaluate(expression, env);
+			if (!env.evaluatedTypes.has(expression))
+				env.evaluatedTypes.set(
+					expression,
+					this.selectType(value, this.staticType(expression, env)),
+				);
+			return value;
+		} catch (error) {
+			if (error instanceof RangeError)
+				throw new LanguageError(expression.span, error.message);
+			throw error;
+		}
+	}
+	private async evaluate(
+		expression: Expression,
+		env: Environment,
+	): Promise<Value> {
 		switch (expression.kind) {
-			case "literal":
-				return expression.value;
-			case "identifier":
-				return env.get(expression.name).get();
+			case "literal": {
+				const type = this.staticType(expression, env);
+				return typeof expression.value === "number" &&
+					(type.kind === "float32" || type.kind === "float64")
+					? roundFloat(expression.value, type.kind)
+					: expression.value;
+			}
+			case "identifier": {
+				const cell = env.get(expression.name);
+				env.evaluatedTypes.set(
+					expression,
+					cell.getType?.() ?? this.staticType(expression, env),
+				);
+				return cell.get();
+			}
 			case "snapshot":
-				return snapshot(await this.expression(expression.value, env));
+			case "read": {
+				const value = await this.expression(expression.value, env);
+				env.evaluatedTypes.set(
+					expression,
+					this.dynamicType(expression.value, env),
+				);
+				return expression.kind === "snapshot" ? snapshot(value) : value;
+			}
+			case "await": {
+				const future = await this.expression(expression.value, env);
+				if (!(future instanceof FutureValue))
+					throw new LanguageError(
+						expression.span,
+						"await requires a Future",
+					);
+				const value = await future.take();
+				env.evaluatedTypes.set(
+					expression,
+					this.futureTypes.get(future) ??
+						this.selectType(
+							value,
+							this.staticType(expression, env),
+						),
+				);
+				return value;
+			}
 			case "raise": {
 				const value = await this.expression(expression.value, env);
 				throw new ReturnSignal(
 					value instanceof ThrowableValue
 						? value
 						: new ThrowableValue(value as string),
+					{ kind: "throwable" },
 				);
 			}
-			case "cast":
-				return project(
-					await this.expression(expression.value, env),
-					substitute(
-						this.program.projections.get(expression)!,
-						env.typeBindings,
-					),
+			case "cast": {
+				const value = await this.expression(expression.value, env);
+				const target = substitute(
+					this.program.projections.get(expression)!,
+					env.typeBindings,
 				);
+				const source = this.dynamicType(expression.value, env);
+				if (isNumericType(source.kind) && isNumericType(target.kind))
+					return numericCast(
+						value as bigint | number,
+						source.kind,
+						target.kind,
+					);
+				const projected = project(value, target, source);
+				env.evaluatedTypes.set(
+					expression,
+					this.projectedType(projected, target, source),
+				);
+				return projected;
+			}
 			case "type-argument":
 				throw new LanguageError(
 					expression.span,
@@ -270,49 +467,87 @@ export class Interpreter {
 				);
 			case "update": {
 				const cell = await this.lvalue(expression.target, env);
-				const value = cell.get() as number;
-				cell.set(this.integer(value + 1, expression));
+				const value = cell.get();
+				const type =
+					cell.getType?.() ?? this.staticType(expression.target, env);
+				if (isIntegerType(type.kind))
+					cell.set(
+						integerOperation(
+							expression.op ?? "++",
+							value as bigint,
+							0n,
+							type.kind,
+						),
+					);
+				else if (type.kind === "float32" || type.kind === "float64")
+					cell.set(
+						roundFloat(
+							(value as number) +
+								(expression.op === "--" ? -1 : 1),
+							type.kind,
+						),
+					);
+				else
+					throw new LanguageError(
+						expression.span,
+						"Update requires a numeric value",
+					);
+				env.evaluatedTypes.set(expression, type);
 				return value;
 			}
 			case "block":
 				return this.block(expression, env);
 			case "array": {
 				const values: Value[] = [];
-				for (const element of expression.elements)
+				for (const element of expression.elements) {
 					values.push(await this.expression(element, env));
+					setMemberType(
+						values,
+						values.length - 1,
+						this.dynamicType(element, env),
+					);
+				}
 				return values;
 			}
 			case "struct": {
 				const value: Record<string, Value> = Object.create(
 					null,
 				) as Record<string, Value>;
-				for (const field of expression.fields)
+				for (const field of expression.fields) {
 					value[field.name] = await this.expression(field.value, env);
+					setMemberType(
+						value,
+						field.name,
+						this.dynamicType(field.value, env),
+					);
+				}
 				return value;
 			}
 			case "member": {
 				const object = await this.expression(expression.object, env);
-				if (Array.isArray(object) && expression.name === "length")
-					return object.length;
 				if (
 					object instanceof ThrowableValue &&
 					expression.name === "message"
 				)
 					return object.message;
-				return this.record(object, expression)[expression.name]!;
+				const record = this.record(object, expression);
+				const type = getMemberType(record, expression.name);
+				if (type) env.evaluatedTypes.set(expression, type);
+				return record[expression.name]!;
 			}
 			case "index": {
 				const object = this.array(
 					await this.expression(expression.object, env),
 					expression,
 				);
-				return object[
-					this.index(
-						await this.expression(expression.index, env),
-						object,
-						expression,
-					)
-				]!;
+				const index = this.index(
+					await this.expression(expression.index, env),
+					object,
+					expression,
+				);
+				const type = getMemberType(object, index);
+				if (type) env.evaluatedTypes.set(expression, type);
+				return object[index]!;
 			}
 			case "call": {
 				const called = this.program.calls.get(expression)!;
@@ -326,54 +561,98 @@ export class Interpreter {
 						env.typeBindings,
 					);
 					try {
-						return project(value, target);
+						const source = this.dynamicType(
+							expression.args[1]!.value,
+							env,
+						);
+						const result = project(value, target, source);
+						env.evaluatedTypes.set(
+							expression,
+							this.projectedType(result, target, source),
+						);
+						return result;
 					} catch (error) {
 						if (!(error instanceof ProjectionError)) throw error;
 						return new ThrowableValue(`trycast: ${error.message}`);
 					}
 				}
 				const args: (Value | Cell)[] = [];
-				for (const [index, arg] of expression.args.entries())
+				for (const [index, arg] of expression.args.entries()) {
 					args.push(
 						called.declaration.params[index]!.mutable
 							? await this.lvalue(arg.value, env)
 							: await this.expression(arg.value, env),
 					);
-				return this.call(called, args, env.typeBindings);
+					setMemberType(
+						args,
+						index,
+						called.declaration.params[index]!.mutable
+							? ((args[index] as Cell).getType?.() ??
+									this.staticType(arg.value, env))
+							: this.dynamicType(arg.value, env),
+					);
+				}
+				const result = await this.call(called, args, env.typeBindings);
+				env.evaluatedTypes.set(expression, result.type);
+				return result.value;
 			}
 			case "unary": {
 				const operand = await this.expression(expression.operand, env);
-				return expression.op === "!"
-					? !operand
-					: this.integer(-(operand as number), expression);
+				if (expression.op === "!") return !operand;
+				const type = this.staticType(expression, env);
+				if (isIntegerType(type.kind))
+					return integerOperation(
+						"negate",
+						operand as bigint,
+						0n,
+						type.kind,
+					);
+				if (type.kind === "float32" || type.kind === "float64")
+					return roundFloat(-(operand as number), type.kind);
+				throw new LanguageError(
+					expression.span,
+					"Unary minus requires a numeric value",
+				);
 			}
 			case "binary": {
 				const left = await this.expression(expression.left, env);
 				if (expression.op === "&&" && left === false) return false;
 				if (expression.op === "||" && left === true) return true;
-				const right = await this.expression(expression.right, env),
-					a = left as number,
-					b = right as number;
-				switch (expression.op) {
-					case "+":
-						return typeof left === "string"
-							? left + (right as string)
-							: this.integer(a + b, expression);
-					case "-":
-						return this.integer(a - b, expression);
-					case "*":
-						return this.integer(a * b, expression);
-					case "/":
-					case "%":
-						if (b === 0)
-							throw new LanguageError(
-								expression.span,
-								"Division by zero",
-							);
-						return this.integer(
-							expression.op === "/" ? Math.trunc(a / b) : a % b,
-							expression,
+				const right = await this.expression(expression.right, env);
+				if (["+", "-", "*", "/", "%"].includes(expression.op)) {
+					if (expression.op === "+" && typeof left === "string")
+						return left + (right as string);
+					const type = this.staticType(expression, env);
+					if (isIntegerType(type.kind))
+						return integerOperation(
+							expression.op,
+							left as bigint,
+							right as bigint,
+							type.kind,
 						);
+					if (type.kind === "float32" || type.kind === "float64") {
+						const a = left as number,
+							b = right as number;
+						const value =
+							expression.op === "+"
+								? a + b
+								: expression.op === "-"
+									? a - b
+									: expression.op === "*"
+										? a * b
+										: expression.op === "/"
+											? a / b
+											: a % b;
+						return roundFloat(value, type.kind);
+					}
+					throw new LanguageError(
+						expression.span,
+						"Arithmetic requires numeric values",
+					);
+				}
+				const a = left as bigint | number,
+					b = right as bigint | number;
+				switch (expression.op) {
 					case "==":
 						return left === right;
 					case "!=":
@@ -393,14 +672,23 @@ export class Interpreter {
 				}
 				throw new LanguageError(expression.span, "Unknown operator");
 			}
-			case "if":
-				return (await this.expression(expression.condition, env))
-					? this.block(expression.then, env)
-					: expression.otherwise
-						? this.block(expression.otherwise, env)
-						: null;
+			case "if": {
+				const branch = (await this.expression(
+					expression.condition,
+					env,
+				))
+					? expression.then
+					: expression.otherwise;
+				const value = branch ? await this.block(branch, env) : null;
+				env.evaluatedTypes.set(
+					expression,
+					branch ? this.dynamicType(branch, env) : VOID,
+				);
+				return value;
+			}
 			case "match": {
 				const value = await this.expression(expression.value, env);
+				const actual = this.dynamicType(expression.value, env);
 				for (const arm of expression.arms) {
 					if (
 						arm.type &&
@@ -410,14 +698,20 @@ export class Interpreter {
 								this.program.matchTypes.get(arm.type)!,
 								env.typeBindings,
 							),
+							actual,
 						)
 					)
 						continue;
 					const branch = new Environment(env);
 					if (expression.value.kind === "identifier")
-						branch.bind(expression.value.name, value, false);
-					if (arm.binding) branch.bind(arm.binding, value, false);
-					return this.expression(arm.body, branch);
+						branch.view(expression.value.name, value, actual);
+					if (arm.binding) branch.view(arm.binding, value, actual);
+					const result = await this.expression(arm.body, branch);
+					env.evaluatedTypes.set(
+						expression,
+						this.dynamicType(arm.body, branch),
+					);
+					return result;
 				}
 				throw new LanguageError(
 					expression.span,
@@ -426,10 +720,23 @@ export class Interpreter {
 			}
 			case "handle": {
 				const value = await this.expression(expression.value, env);
-				if (!(value instanceof ThrowableValue)) return value;
+				if (!(value instanceof ThrowableValue)) {
+					env.evaluatedTypes.set(
+						expression,
+						this.dynamicType(expression.value, env),
+					);
+					return value;
+				}
 				const handler = new Environment(env);
-				handler.bind(expression.binding, value, false);
-				return this.block(expression.body, handler);
+				handler.bind(expression.binding, value, false, {
+					kind: "throwable",
+				});
+				const result = await this.block(expression.body, handler);
+				env.evaluatedTypes.set(
+					expression,
+					this.dynamicType(expression.body, handler),
+				);
+				return result;
 			}
 		}
 	}

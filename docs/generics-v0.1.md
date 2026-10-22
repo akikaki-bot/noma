@@ -29,7 +29,7 @@ replace<int32>(x, 20);
 let saved: int32 = identity<int32>(snapshot x);
 ```
 
-`identity<int32>(x)` はReadonly引数への可変値なのでエラー。可変引数の不変な型一致・排他的借用・Deep Readonly・snapshotの独立性は維持する。抽象的なReadonly `T` は値として受け渡せるため `identity<T>` を許可し、現在のInterpreterは引数と戻り値を独立したDeep Readonly値としてコピーする。既知の構造体・配列型のReadonly引数からの保持や返却には、従来どおりsnapshotを要求する。
+`identity<int32>(x)` はReadonly引数への可変値なのでエラー。`read x` または `snapshot x` を使う。可変引数の不変な型一致・排他的借用・Deep Readonly・snapshotの独立性は維持する。抽象的なReadonly `T` は通常の値として受け渡せるため `identity<T>` を許可するが、`read` で渡した集約値の保持や暗黙コピーは追加検査で拒否する。既知の構造体・配列型のReadonly引数の保持・返却にも従来どおりsnapshotが必要。現在の引数・戻り値の受け渡しはコピーせず、明示的Snapshotと可変ストレージの作成時に独立コピーする。Futureを含む型の一般の型引数への受け渡しは、型制約がないため保守的に拒否する。詳しくは [Read / Array / Future v0.1](read-array-future.md)。
 
 実行は検査済みの関数ASTを共有する。呼び出しフレームごとに型パラメータの代入表を持ち、引数・戻り値・キャスト・trycast・matchを具体化した型で検証する。未解決の抽象型をランタイムの万能型として扱わない。型パラメータを用いてmatchの保守的な重なり検査を緩和しない。
 

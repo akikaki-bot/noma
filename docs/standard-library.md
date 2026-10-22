@@ -1,6 +1,10 @@
 # Noma 標準ライブラリAPI（実験版）
 
-公開関数は `stdlib/std/*.noma` に実装する。通常引数はすべてReadonlyで、元の値を変更しない。可変値を渡す場合はスカラーも含めて `snapshot` が必要。型推論・暗黙の数値変換・関数オーバーロードは導入していない。
+公開関数は `stdlib/std/*.noma` に実装する。通常引数はReadonlyで、元の値を変更しない。可変値を渡す場合はスカラーも含めて `read` または `snapshot` が必要。`std/arr`の更新操作は宣言の `mut` で変更権限を明示する。型推論・暗黙の数値変換・関数オーバーロードは導入していない。
+
+## std/arr
+
+`create<T>`、`length<T>`、`get<T>`、`set<T>`、`push<T>`、`pop<T>`、`remove<T>` を提供する。`get` は独立したSnapshotを返し、`pop` / `remove` は要素を移動する。不正インデックス・空配列の失敗は既存のthrowableで扱い、失敗時は変更しない。配列の `.length` は廃止した。全署名・エラー規則・非複製型の制限は [Read / Array / Future v0.1](read-array-future.md) を参照。公開ラッパーはNoma、Opaqueストレージの操作は `std/internal/arr` のprivateな `native fn` とNativeRegistryの配列用借用ABIで実装する。
 
 ```noma
 use "std/string" as str;
@@ -58,10 +62,11 @@ pub fn main() -> int32 {
 
 ## std/number
 
-対象は `int32`（-2147483648〜2147483647）。文字列化・パースはNomaコードで実装し、Node.jsの数値パースや文字列変換に委譲しない。
+`toString` は8種類の固定幅整数型（`int8` / `int16` / `int32` / `int64` / `uint8` / `uint16` / `uint32` / `uint64`）と `float32` / `float64` を明示的なunion型の引数で受け付ける。整数はすべて10進で正確に文字列化し、`uint64` 最大値も `"18446744073709551615"` として出力する。浮動小数点数の特殊値は `"Infinity"` / `"-Infinity"` / `"NaN"`、負のゼロは `"-0"` とする。既存の `int32` 専用APIも維持する。`int32ToString` と `parseInt32` はNomaコードで実装し、ホストの浮動小数点数パースを経由しない。
 
 | 関数 | 戻り値 | 動作 |
 | --- | --- | --- |
+| `toString(value: 数値型のunion)` | `string` | 8整数型・2浮動小数点型の文字列化。整数の精度を保持 |
 | `absInt32(value: int32)` | `int32 \| throwable` | 絶対値。INT32_MINは失敗 |
 | `minInt32(a: int32, b: int32)` | `int32` | 小さい値 |
 | `maxInt32(a: int32, b: int32)` | `int32` | 大きい値 |
@@ -74,7 +79,7 @@ pub fn main() -> int32 {
 
 `parseInt32` の形式はASCIIの `[+-]?[0-9]+`。前後・途中の空白は一切許可しない。空文字列、符号のみ、小数点、指数、基数プレフィックス、区切り記号、非ASCII数字は拒否する。先頭ゼロと `+` を許可し、`-0` / `+0` は0。負側に蓄積してINT32_MINを安全に扱い、各桁の更新にchecked演算を使う。例: `"+0012"` は12、`" 12"` / `"2147483648"` は失敗。
 
-整数リテラル・単項マイナス・算術演算・snapshotからなる定数式のオーバーフローは、BigIntで正確に検査してコンパイルエラーにする。これは定数式の検査であり、識別子や関数呼出しを評価する定数伝播は行わない。通常演算の実行時オーバーフロー（加減乗除、単項マイナス、`++`）は従来どおりRuntime Errorで停止する。0除算もRuntime Error。除算は0方向への切捨て、剰余は既存の規則に従い、int32の0がホストの `-0` として漏れないようにする。
+8整数型のリテラル・単項マイナス・算術演算・snapshotからなる定数式のオーバーフローは、正確に検査してコンパイルエラーにする。これは定数式の検査であり、識別子や関数呼出しを評価する定数伝播は行わない。通常演算の実行時オーバーフロー（加減乗除・剰余、単項マイナス、`++` / `--`）はRuntime Errorで停止する。0除算もRuntime Errorで、定数式ならコンパイル時に拒否する。除算は0方向への切捨て、剰余は被除数の符号に従い、整数には負のゼロを持たせない。
 
 checked演算は通常のNoma演算を先に実行せず、内部nativeでBigIntによる正確な計算と範囲検査を行う。失敗時はRuntime Errorで停止せず、既存の `throwable` を返す。定数の引数でも `checkedAddInt32(2147483647, 1)` は呼出しとしてコンパイルできる。除算のchecked APIは今回追加していない。
 
@@ -82,9 +87,11 @@ checked演算は通常のNoma演算を先に実行せず、内部nativeでBigInt
 
 既存の `write` / `puts` / `writeError` / `putsError` / `readLine` / `EOF` に加え、指定された使用例の `stdoutWrite(text: string) -> void | throwable` を `write` と同じ動作のNomaラッパーとして公開する。
 
+数値は `number.toString(value)` で明示的に文字列化して渡す。例えば `let value: uint64 = 18446744073709551615; io.puts(number.toString(value));` は最大値を精度を失わず出力する。I/O関数に暗黙の数値変換は導入しない。
+
 ## ホスト実装と信頼境界
 
-追加したホスト処理は以下の6関数。宣言はprivateな `native fn`、他モジュールへの公開は既存方式のNomaラッパー経由。TSAnyは使わない。
+文字列・数値のホスト処理は以下の7関数。宣言はprivateな `native fn`、他モジュールへの公開は既存方式のNomaラッパー経由。TSAnyは使わない。
 
 | 内部モジュール | native宣言 |
 | --- | --- |
@@ -94,13 +101,18 @@ checked演算は通常のNoma演算を先に実行せず、内部nativeでBigInt
 | `std/internal/number` | `checkedAdd(int32, int32) -> int32 \| throwable` |
 | 同上 | `checkedSub(int32, int32) -> int32 \| throwable` |
 | 同上 | `checkedMul(int32, int32) -> int32 \| throwable` |
+| 同上 | `numericToString(数値型のunion) -> string` |
+
+TypeScript RuntimeとNative Bridgeでは、8整数型の内部値をすべてJavaScriptの `bigint` として受け渡す。これはホスト実装の詳細であり、NomaにBigInt型を追加するものではない。Native Registryは宣言されたNoma型・具体的な整数幅・値域と内部表現を検証し、整数契約にJavaScriptの `number` を返す実装は拒否する。`float32` / `float64` は `number` のままとし、`float32` は32bit精度を検証する。
+
+配列・文字列のインデックスと長さは引き続きNomaの `int32`。配列インデックスは `bigint` のまま境界を検査してから安全なホスト添字へ変換し、コードポイントの生成もUnicodeスカラー範囲を検査した後でだけホストAPIへ渡す。整数の範囲と演算規則は共通の数値仕様に集約し、将来のVMやWasmでも同じ結果・エラーを再現する。
 
 `codepointAt` は負・末尾以降の添字と不正スカラー文字列で失敗する。`fromCodepoint` は0〜0x10FFFFのうちサロゲート範囲を除く値だけを受け付ける。`codepointLength` は戻り値にthrowableを持たないため、不正文字列でRuntime Errorとなる。公開の非失敗API内では、長さと範囲を検証した後にのみ内部取得・生成を使う。
 
-`createIORegistry(host)` はこれらの登録も行い、CLI / `runFile` は変更なしで全モジュールを読み込める。I/Oを使わない埋込みでは、空の `NativeRegistry` に `registerCoreNatives(registry)` を呼べる。native署名の照合・入出力の型検証・Readonlyコピー・`std/internal` のimport制限は既存の共通機構を使う。
+`createIORegistry(host)` はこれらの登録も行い、CLI / `runFile` は全モジュールを読み込める。I/Oを使わない埋込みでは、`NativeRegistry` に `registerCoreNatives(registry)` を呼べる。配列の7 nativeはRegistry作成時に登録する。通常nativeのReadonlyコピーを維持し、配列だけは署名・具体型・mutセルのモードを検査する専用借用ABIを使う。`std/internal` のimport制限は共通機構を使う。
 
 現在の実装はASTインタプリタ上の正しさを優先する。コードポイント位置へのアクセスは線形走査であり、検索・連結は大入力向けに最適化していない。既存の実行ステップ上限とホストのメモリ・文字列サイズ上限は引き続き適用され、メモリ不足をthrowableへ変換する保証はない。
 
 ## 検証
 
-`npm test` はTypeScriptビルド、nativeのUnicodeスカラー検査・BigInt比較テスト、実際の [stdlib.noma](../test/fixtures/stdlib.noma) と例の実行、Readonly拒否、native ABI・非公開境界、定数式のコンパイルエラーと通常演算のRuntime Errorを検証する。
+`npm test` はTypeScriptビルド、nativeのUnicodeスカラー検査・正確な整数比較、実際の [stdlib.noma](../test/fixtures/stdlib.noma) と例の実行、Readonly拒否、native ABI・非公開境界、定数式のコンパイルエラーと通常演算のRuntime Errorを検証する。[numeric-native.noma](../test/fixtures/numeric-native.noma) では全整数型の文字列出力、`uint64` 配列の読み書き、snapshot、ジェネリック関数とNative Bridgeの精度を検証する。

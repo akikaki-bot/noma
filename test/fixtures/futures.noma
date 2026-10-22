@@ -1,0 +1,28 @@
+use "std/io" as io;
+
+async fn calculate() -> int32 {
+    io.puts("body") catch e { return 1; };
+    return 42;
+}
+async fn fail() -> string | throwable { raise "load failed"; }
+fn transfer(value: Future<int32>) -> Future<int32> { return value; }
+async fn nested() -> Future<int32> { return calculate(); }
+
+pub async fn main() -> int32 {
+    let unused: Future<int32> = calculate();
+    let pending: Future<int32> = calculate();
+    let owned: Future<int32> = transfer(pending);
+    io.puts("created") catch e { return 2; };
+    let answer: int32 = await owned;
+    if answer != 42 { return 3; }
+    let recovered: string = await fail() otherwise e { e.message };
+    if recovered != "load failed" { return 4; }
+    let inner: Future<int32> = await nested();
+    let again: int32 = await inner;
+    if again != 42 { return 5; }
+    let failed: string = await fail() catch e {
+        io.puts("caught") catch err { return 6; };
+        return 0;
+    };
+    return 7;
+}

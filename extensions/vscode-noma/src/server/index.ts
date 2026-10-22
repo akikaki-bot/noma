@@ -28,7 +28,7 @@ connection.onInitialize((params) => {
 		(params.rootUri ? [{ uri: params.rootUri, name: "workspace" }] : []);
 	service.setFolders(folders.map((folder) => folder.uri));
 	return {
-		serverInfo: { name: "Noma Language Server", version: "0.2.0" },
+		serverInfo: { name: "Noma Language Server", version: "0.3.0" },
 		capabilities: {
 			positionEncoding: PositionEncodingKind.UTF16,
 			textDocumentSync: {

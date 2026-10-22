@@ -18,7 +18,7 @@
 
 ## 継続して守る設計意図
 
-変数の型推論は導入しない。型構築と命名を分ける。構造的型付けを維持し、構造の異なる型への変換には明示的射影を要求する。変更の伝播を明示し、snapshotの独立性を破らない。可変引数は宣言側だけでmutを指定し、Readonly引数への可変値にはsnapshotを要求する。useのaliasとpubを明示する。I/Oを組込みprintへ戻さない。stdlibの大半はNomaで書き、Node.js依存をnative境界に集める。手動メモリ管理を利用者へ要求しない。
+変数の型推論は導入しない。型構築と命名を分ける。構造的型付けを維持し、構造の異なる型への変換には明示的射影を要求する。変更の伝播を明示し、snapshotの独立性を破らない。可変引数は宣言側だけでmutを指定し、Readonly引数への可変値にはreadまたはsnapshotを要求する。配列リテラルは期待型必須、要素数はstd/arrのlengthで取得する。Futureの非複製性と単一消費を維持する。詳しくは [Read / Array / Future v0.1](read-array-future.md)。useのaliasとpubを明示する。I/Oを組込みprintへ戻さない。stdlibの大半はNomaで書き、Node.js依存をnative・Intrinsic境界に集める。手動メモリ管理を利用者へ要求しない。
 
 ## 未決事項（今後レビューするもの）
 

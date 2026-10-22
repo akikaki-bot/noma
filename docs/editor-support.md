@@ -10,12 +10,18 @@
 | モジュール解決 | 実装済み | `src/modules.ts` の `loadProgram`。ファイル取得・stdlibルートの注入、未保存ソース、循環・パストラバーサル・信頼境界の検証 |
 | シンボル解決 | API基盤を実装 | Checkerの解決に基づく `checked.semantic`。宣言ID、参照、スコープ、可変性、絞り込みを保持。構造的フィールドの定義IDは未定義 |
 | 型検査 | 実装済みの範囲あり | `src/checker.ts` と `src/types.ts`。明示型、構造型、明示的射影、trycast、Union、配列、型付きmatchと網羅性、raise/catch/otherwise。再帰型エイリアス等には制限あり |
-| 可変性検査 | 実装済みの範囲あり | Deep Readonly、snapshot要求、署名によるmut引数とReadonly引数へのsnapshot要求、可変引数の不変性、別名競合・借用値の脱出の保守的な検査。言語全体の寿命・並行性規則を確定するものではない |
+| 可変性検査 | 実装済みの範囲あり | Deep Readonly、read / snapshot、署名によるmut引数、可変引数の不変性、別名競合・借用値の脱出、Futureの消費状態を保守的に検査。詳細はRead / Array / Future v0.1を参照 |
 | Native / stdlib | 実装済みの範囲あり | 信頼された `std/internal` の `native fn`、`compilerOnly type TSAny = intrinsic`、型付きNative Registry。`std/io` は実験的APIとしてEOF・エラーを区別 |
 | ソース位置・診断 | 一部実装 | Spanの互換性を維持し、Token/ASTにUTF-16半開範囲・識別子範囲を追加。解析APIは最初の診断を返す。複数診断・Parser回復は未実装 |
 | LSPサーバー・クライアント | 0.2.0で接続 | 既存解析APIを共有する診断・補完・引数ヒント・Hover・定義・参照。通信・文書管理は処理系とは別ディレクトリ |
 
 v0.0.2ではraise/catch、構造的cast、std/typingの型指定引数、Array<T>表記、名前付き構造体値、int32の後置++に対応しました。Generics v0.1と条件式の括弧省略、未完成コード補完・引数ヒントにも対応しています。continueは未実装です。以下の0.2.0以前の件数は当時の検証記録です。
+
+## Read / Array / Future対応（0.3.0 — 2026-10-18）
+
+read / async / await / Futureの診断・補完・型表示・引数ヒント・定義・参照に対応した。配列の `.length` は診断し補完から除去するが、構造体の同名フィールドは維持する。std/arrの7公開関数だけを補完し、内部のprivate nativeは公開しない。期待型がない配列、借用競合、Futureの二重消費やSnapshotを未保存編集でも検査する。
+
+スニペットはasyncmain / asyncfn / read / array / arrlen / future / awaitを追加し、計21種類。拡張49件のテストと実際のExtension Hostで、補完・FutureのHover・async署名・消費／length診断の修正、untitledへのasync mainスニペット挿入を検証した。配列の借用ABIの型定義とランタイムを分離し、LSPバンドルにInterpreter・NativeRegistryを含めない。
 
 ## 第二段階のLSP接続（0.2.0）
 

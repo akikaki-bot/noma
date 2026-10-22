@@ -2,7 +2,9 @@
 native fn checkedAdd(a: int32, b: int32) -> int32 | throwable;
 native fn checkedSub(a: int32, b: int32) -> int32 | throwable;
 native fn checkedMul(a: int32, b: int32) -> int32 | throwable;
+native fn numericToString(value: int8 | int16 | int32 | int64 | uint8 | uint16 | uint32 | uint64 | float32 | float64) -> string;
 
 pub fn add(a: int32, b: int32) -> int32 | throwable { return checkedAdd(a, b); }
 pub fn sub(a: int32, b: int32) -> int32 | throwable { return checkedSub(a, b); }
 pub fn mul(a: int32, b: int32) -> int32 | throwable { return checkedMul(a, b); }
+pub fn toString(value: int8 | int16 | int32 | int64 | uint8 | uint16 | uint32 | uint64 | float32 | float64) -> string { return numericToString(value); }

@@ -36,6 +36,9 @@ export const keywords = [
 	"catch",
 	"otherwise",
 	"snapshot",
+	"read",
+	"async",
+	"await",
 	"struct",
 	"true",
 	"false",
@@ -253,6 +256,7 @@ class Parser {
 				"compilerOnly is allowed only on a type declaration",
 			);
 		const native = this.accept("native");
+		const isAsync = this.accept("async");
 		this.expect("fn");
 		const nameToken = this.identifier(),
 			name = nameToken.text;
@@ -298,6 +302,7 @@ class Parser {
 			body,
 			public: isPublic,
 			native,
+			async: isAsync,
 		};
 	}
 	private typeParameters(): TypeParameter[] {
@@ -401,7 +406,7 @@ class Parser {
 				if (
 					this.offset > start &&
 					(declaration
-						? ["pub", "fn", "type", "use"]
+						? ["pub", "async", "fn", "type", "use"]
 						: ["let", "return", "while"]
 					).some((word) => this.at(word))
 				)
@@ -554,8 +559,9 @@ class Parser {
 				left = { kind: "index", span, object: left, index };
 				continue;
 			}
-			if (this.accept("++")) {
-				left = { kind: "update", span, target: left };
+			if (this.at("++") || this.at("--")) {
+				const op = this.take().text as "++" | "--";
+				left = { kind: "update", span, target: left, op };
 				continue;
 			}
 			let typeArgs: TypeNode[] | undefined;
@@ -642,6 +648,10 @@ class Parser {
 			span = token.span;
 		if (this.accept("snapshot"))
 			return { kind: "snapshot", span, value: this.expression(7) };
+		if (this.accept("read"))
+			return { kind: "read", span, value: this.expression(7) };
+		if (this.accept("await"))
+			return { kind: "await", span, value: this.expression(7) };
 		if (this.accept("raise"))
 			return { kind: "raise", span, value: this.expression() };
 		if (this.at("!") || this.at("-")) {
@@ -662,12 +672,16 @@ class Parser {
 			const startsValue =
 				this.current.kind === "string" ||
 				this.current.kind === "number" ||
+				this.at("-") ||
+				this.at("!") ||
 				this.at("(") ||
 				this.at("[") ||
 				(this.current.kind === "identifier" &&
 					(!reserved.has(this.current.text) ||
 						[
 							"snapshot",
+							"read",
+							"await",
 							"true",
 							"false",
 							"void",
@@ -679,18 +693,29 @@ class Parser {
 					this.typeNames.has(target.name) ||
 					[
 						"int32",
+						"int8",
+						"int16",
+						"int64",
+						"uint8",
+						"uint16",
+						"uint32",
+						"uint64",
+						"float32",
+						"float64",
 						"string",
 						"bool",
 						"void",
 						"never",
 						"throwable",
 						"Type",
+						"Future",
 					].includes(target.name) ||
 					(target.name.includes(".") &&
 						this.aliases.has(target.name.split(".")[0]!)));
 			if (
 				target &&
 				startsValue &&
+				(knownType || (!this.at("-") && !this.at("!"))) &&
 				(knownType || (!this.at("(") && !this.at("[")))
 			)
 				return {
@@ -819,7 +844,12 @@ class Parser {
 				kind: "literal",
 				span,
 				value:
-					token.kind === "number" ? Number(token.text) : token.text,
+					token.kind === "number"
+						? /[.eE]/.test(token.text)
+							? Number(token.text)
+							: BigInt(token.text)
+						: token.text,
+				...(token.kind === "number" ? { raw: token.text } : {}),
 			};
 		}
 		if (this.accept("true")) return { kind: "literal", span, value: true };

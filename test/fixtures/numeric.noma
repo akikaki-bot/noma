@@ -1,0 +1,19 @@
+use "std/io" as io;
+use "std/number" as number;
+use "std/arr" as arr;
+
+fn identity<T>(value:T)->T{return value;}
+fn main()->int32{
+ let values:Array<uint64>=[9007199254740991,9007199254740992,9007199254740993,9223372036854775807];
+ let mut index:int32=0;
+ while index<4{
+  let value:uint64=arr.get<uint64>(read values,snapshot index) catch e{return 1;};
+  io.puts(number.toString(value)) catch e{return 2;};
+  index++;
+ }
+ let min:int64=-9223372036854775808;
+ let max:uint64=identity<uint64>(18446744073709551615);
+ io.puts(number.toString(min)) catch e{return 3;};
+ io.puts(number.toString(max)) catch e{return 4;};
+ return 0;
+}

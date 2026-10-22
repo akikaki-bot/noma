@@ -45,7 +45,7 @@ test("disjoint structural alternatives and a shared wildcard arm are accepted", 
 		} fn main() -> int32 { return f(struct { x: 9 }); }
 	`,
 		),
-		10,
+		10n,
 	);
 	assert.equal(
 		await run(
@@ -56,7 +56,7 @@ test("disjoint structural alternatives and a shared wildcard arm are accepted", 
 		} fn main() -> int32 { return f(struct { x: 9 }); }
 	`,
 		),
-		4,
+		4n,
 	);
 });
 test("union mutation cannot break correlations between fields", async (t) => {
@@ -80,15 +80,16 @@ test("expected array types reach branch and function tails without inferring a d
 		await run(
 			t,
 			`
+		use "std/arr" as arr;
 		fn empty() -> int32[] { [] }
 		fn main() -> int32 {
 			let a: int32[] = if true { [] } else { empty() };
 			let b: int32[] = match (true) { case (flag: bool) { [] } };
-			return a.length + b.length;
+			return arr.length<int32>(a) + arr.length<int32>(b);
 		}
 	`,
 		),
-		0,
+		0n,
 	);
 });
 test("native validates TSAny input at the typed registry boundary", async (t) => {

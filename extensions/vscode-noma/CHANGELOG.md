@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.0 — 2026-10-18
+
+- Support temporary `read` borrowing, lazy `Future<T>`, async/await and ownership diagnostics.
+- Complete new keywords and Future types; show async call signatures as `Future<T>` and preserve definitions/references.
+- Bundle `std/arr` and its typed private native boundary. Expose the seven public array operations in completion.
+- Remove array `.length` completion and diagnose its use; retain ordinary struct fields named `length`.
+- Require expected types for array literals and explicit generic arguments.
+- Add seven snippets for async main/functions, read arguments, typed arrays, array length, Future bindings and await results.
+- Extend JSON-RPC, snippet and Extension Host regression tests.
+
 ## 0.2.0 — 2026-10-15
 
 - Separate VS Code client, LSP transport/service and compiler source directories.

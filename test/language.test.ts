@@ -38,7 +38,7 @@ test("arithmetic, functions, loop, ordinary break and explicit mut", async (t) =
 			return x * 3 + 8 / 3;
 		}`,
 	);
-	assert.equal(value, 14);
+	assert.equal(value, 14n);
 });
 test("structural equality of types, union order and explicit projection", async (t) => {
 	assert.equal(
@@ -57,7 +57,7 @@ test("structural equality of types, union order and explicit projection", async 
 			return match (v) { case (n: int32) { n } case (b: bool) { 0 } };
 		}`,
 		),
-		42,
+		42n,
 	);
 });
 test("snapshot isolates nested structs and arrays; mutation reaches caller fields", async (t) => {
@@ -77,7 +77,7 @@ test("snapshot isolates nested structs and arrays; mutation reaches caller field
 			return 1;
 		}`,
 		),
-		0,
+		0n,
 	);
 });
 test("a new mutable binding and assignment copy aggregates independently", async (t) => {
@@ -95,7 +95,7 @@ test("a new mutable binding and assignment copy aggregates independently", async
 			return original.values[0] + a.values[0] + b.values[0];
 		}`,
 		),
-		6,
+		6n,
 	);
 });
 test("readonly arguments receive a snapshot of mutable input", async (t) => {
@@ -103,11 +103,11 @@ test("readonly arguments receive a snapshot of mutable input", async (t) => {
 		await run(
 			t,
 			`
-		fn read(x: int32) -> int32 { return x + 1; }
-		fn main() -> int32 { let mut x: int32 = 2; return read(snapshot x); }
+		fn inspect(x: int32) -> int32 { return x + 1; }
+		fn main() -> int32 { let mut x: int32 = 2; return inspect(snapshot x); }
 	`,
 		),
-		3,
+		3n,
 	);
 });
 test("match narrows both binding and original identifier; also works as a statement", async (t) => {
@@ -125,7 +125,7 @@ test("match narrows both binding and original identifier; also works as a statem
 		fn main() -> int32 { return classify(9); }
 	`,
 		),
-		10,
+		10n,
 	);
 });
 test("module access requires alias and pub for functions and types", async (t) => {
@@ -143,7 +143,7 @@ test("module access requires alias and pub for functions and types", async (t) =
 					"pub type Number = int32; pub fn answer() -> Number { return 42; }",
 			},
 		),
-		42,
+		42n,
 	);
 });
 
@@ -310,9 +310,9 @@ const rejected: [string, string, RegExp][] = [
 		/Recursive/,
 	],
 	[
-		"array length readonly",
+		"array properties are opaque",
 		"fn main() -> void { let mut a: int32[] = [1]; a.length = 2; }",
-		/length is readonly/,
+		/Arrays have no properties/,
 	],
 	[
 		"number overflow literal",
@@ -353,7 +353,7 @@ test("cyclic modules report a diagnostic", async (t) => {
 test("int32 arithmetic range and index errors have source locations", async (t) => {
 	assert.equal(
 		await run(t, "fn main() -> int32 { return -2147483648; }"),
-		-2147483648,
+		-2147483648n,
 	);
 	await assert.rejects(
 		run(t, "fn main() -> int32 { return 2147483647 + 1; }"),
@@ -372,9 +372,9 @@ test("boolean operators short circuit", async (t) => {
 	assert.equal(
 		await run(
 			t,
-			"fn main() -> int32 { if false && 1 / 0 == 0 { return 1; } if true || 1 / 0 == 0 { return 0; } return 2; }",
+			"fn zero()->int32{return 0;} fn main() -> int32 { if false && 1 / zero() == 0 { return 1; } if true || 1 / zero() == 0 { return 0; } return 2; }",
 		),
-		0,
+		0n,
 	);
 });
 test("snapshot binds to the selected element unless the snapshot is parenthesized", () => {
